@@ -1,8 +1,8 @@
 # sveltekit-adapter-bare
 
-> ⚠️ **Highly experimental.** This adapter is a proof of concept for running a SvelteKit app inside the [bare](https://github.com/holepunchto/bare) runtime so it can be packaged with [`bare-pack`](https://github.com/holepunchto/bare-pack) and rendered in a native window via [`bare-native`](https://github.com/holepunchto/bare-native). Expect rough edges, missing features, and breaking changes.
+> ⚠️ **Highly experimental.** This adapter is a proof of concept for running a SvelteKit app inside the [bare](https://github.com/holepunchto/bare) runtime so it can be packaged with [`bare-build`](https://github.com/holepunchto/bare-build) and rendered in a native window via [`bare-native`](https://github.com/holepunchto/bare-native). Expect rough edges, missing features, and breaking changes.
 
-A SvelteKit [adapter](https://svelte.dev/docs/kit/adapters) that produces a server bundle runnable by `bare` instead of Node.js. The output is a plain `build/` directory you can hand to `bare-pack` to produce a single-file, native-windowed app.
+A SvelteKit [adapter](https://svelte.dev/docs/kit/adapters) that produces a server bundle runnable by `bare` instead of Node.js. The output is a plain `build/` directory you can hand to `bare-build` to produce a single-file, native-windowed app.
 
 ## Install
 
@@ -51,7 +51,7 @@ Options:
 
 ## Build
 
-Three steps — SvelteKit produces the bare-compatible server, `bare-build` links it for a target platform against the `bare-native` runtime, and `bare-pack` wraps the result into a native app:
+Three steps — SvelteKit produces the bare-compatible server, `bare-build` links it for a target platform against the `bare-native` runtime, and `bare-build` wraps the result into a native app:
 
 ```sh
 # 1. Vite build — the adapter emits ./build
@@ -84,7 +84,7 @@ Flags:
 - Bundles SvelteKit's server with `esbuild`, aliasing `node:*` builtins to their `bare-*` equivalents.
 - Patches out SvelteKit's lazy `obfuscated_import("node:crypto")` fallback — `globalThis.crypto` is assigned at startup from `bare-crypto`.
 - Stubs `node:async_hooks` (bare doesn't ship an equivalent; SvelteKit's `AsyncLocalStorage` usage works against a minimal shim).
-- Emits an `assets.js` module with one static `import.meta.asset()` call per file in `client/` and `prerendered/`, so `bare-module-traverse` preserves every static asset when `bare-pack` bundles the app.
+- Emits an `assets.js` module with one static `import.meta.asset()` call per file in `client/` and `prerendered/`, so `bare-module-traverse` preserves every static asset when `bare-build` bundles the app.
 - Polyfills `Request.prototype.formData()` on top of `bare-fetch`, supporting `application/x-www-form-urlencoded` and simple `multipart/form-data` (text fields) so SvelteKit form actions work.
 
 ## Known limitations
