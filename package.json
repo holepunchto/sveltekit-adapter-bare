@@ -1,7 +1,7 @@
 {
-  "name": "@holepunchto/repo-template",
+  "name": "sveltekit-adapter-bare",
   "version": "0.0.1",
-  "description": "repo-template",
+  "description": "sveltekit-adapter-bare",
   "main": "index.js",
   "exports": {
     "./package": "./package.json",
@@ -11,15 +11,21 @@
     }
   },
   "files": [
+    "async-hooks-stub.js",
     "package.json",
     "index.js",
-    "index.d.ts"
+    "inject.js",
+    "files"
   ],
+  "peerDependencies": {
+    "@sveltejs/kit": "^2.0.0"
+  },
   "devDependencies": {
     "brittle": "^3.19.0",
     "lunte": "^1.2.0",
     "prettier": "^3.6.2",
-    "prettier-config-holepunch": "^2.0.0"
+    "prettier-config-holepunch": "^2.0.0",
+    "esbuild": "^0.28.0"
   },
   "scripts": {
     "format": "prettier . --write",
@@ -28,12 +34,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/holepunchto/repo-template.git"
+    "url": "https://github.com/holepunchto/sveltekit-adapter-bare.git"
   },
   "author": "Holepunch Inc",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/holepunchto/repo-template/issues"
+    "url": "https://github.com/holepunchto/sveltekit-adapter-bare/issues"
   },
-  "homepage": "https://github.com/holepunchto/repo-template"
+  "homepage": "https://github.com/holepunchto/sveltekit-adapter-bare"
 }
