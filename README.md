@@ -6,6 +6,8 @@ A SvelteKit [adapter](https://svelte.dev/docs/kit/adapters) that produces a serv
 
 ![bare-svelte](example.png)
 
+Demo: https://github.com/Drache93/bare-svelte-demo
+
 ## Install
 
 ```sh
