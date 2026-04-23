@@ -4,6 +4,8 @@
 
 A SvelteKit [adapter](https://svelte.dev/docs/kit/adapters) that produces a server bundle runnable by `bare` instead of Node.js. The output is a plain `build/` directory you can hand to `bare-build` to produce a single-file, native-windowed app.
 
+![bare-svelte](example.png)
+
 ## Install
 
 ```sh

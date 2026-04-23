@@ -17,7 +17,11 @@ if (typeof Request.prototype.formData !== 'function') {
 		const fd = new FormData();
 
 		if (contentType.startsWith('application/x-www-form-urlencoded')) {
-			const params = new URLSearchParams(await this.text());
+			// The urlencoded spec says `+` decodes to space, but whichever global
+			// URLSearchParams bare exposes doesn't honor that. Normalize `+` →
+			// `%20` first so decoding is correct regardless of implementation.
+			const body = (await this.text()).replace(/\+/g, '%20');
+			const params = new URLSearchParams(body);
 			for (const [k, v] of params) fd.append(k, v);
 			return fd;
 		}
