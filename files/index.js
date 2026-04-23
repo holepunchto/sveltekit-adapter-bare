@@ -10,7 +10,7 @@ globalThis.crypto = webcrypto;
 const cmd = command(
 	'app',
 	flag('--host <host>', 'Host to listen on').default('0.0.0.0'),
-	flag('--port <port>', 'Port to listen on').default('3000'),
+	flag('--port <port>', 'Port to listen on (0 = random, OS-assigned)').default('0'),
 	flag('--width <px>', 'Window width').default('800'),
 	flag('--height <px>', 'Window height').default('600'),
 	flag('--inspectable', 'Enable WebView inspector')
@@ -19,7 +19,7 @@ const cmd = command(
 cmd.parse(process.argv.slice(2), { run: false });
 
 const host = cmd.flags.host ?? '0.0.0.0';
-const port = Number(cmd.flags.port ?? 3000);
+const requested_port = Number(cmd.flags.port ?? 0);
 const width = Number(cmd.flags.width ?? 800);
 const height = Number(cmd.flags.height ?? 600);
 const inspectable = cmd.flags.inspectable === true;
@@ -41,7 +41,10 @@ function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-server.listen(port, host, () => {
+server.listen(requested_port, host, () => {
+	// `port: 0` asks the OS for a free port; read the real one back so the
+	// WebView connects to the actual listening port.
+	const { port } = server.address();
 	console.log(`Listening on http://${host}:${port}`);
 
 	const window = new Window(width, height);
@@ -51,4 +54,4 @@ server.listen(port, host, () => {
 	if (inspectable) webView.inspectable(true);
 });
 
-export { host, port, server };
+export { server };

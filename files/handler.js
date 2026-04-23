@@ -1,9 +1,12 @@
-import fs from 'bare-fs';
 import process from 'bare-process';
-import { fileURLToPath } from 'bare-url';
 import Request from 'bare-fetch/request';
 import { FormData } from 'bare-form-data';
 import { ReadableStream } from 'bare-stream/web';
+
+// Platform-specific asset reader. Resolved via the `imports` map in
+// ./package.json: desktop → lib/read-asset.js (file:// via bare-fs),
+// Android → lib/read-asset.android.js (bundle protocol).
+import { read_asset } from '#read-asset';
 
 // bare-fetch's Body mixin doesn't implement formData(); SvelteKit form actions
 // call request.formData() on POSTs, so polyfill it here. Supports the two
@@ -69,10 +72,12 @@ await server.init({
 			const key = (base ? base.replace(/^\//, '') + '/' : '') + file;
 			const resolved = client_assets[key];
 			if (!resolved) return controller.error(new Error('asset not found: ' + key));
-			const stream = fs.createReadStream(fileURLToPath(resolved));
-			stream.on('data', (chunk) => controller.enqueue(chunk));
-			stream.on('end', () => controller.close());
-			stream.on('error', (e) => controller.error(e));
+			try {
+				controller.enqueue(read_asset(resolved));
+				controller.close();
+			} catch (e) {
+				controller.error(e);
+			}
 		}
 	})
 });
@@ -126,21 +131,25 @@ function serve_assets (assets, opts = {}) {
 		}
 		if (!asset_url) return next();
 
-		const filepath = fileURLToPath(asset_url);
-		let stat;
-		try { stat = fs.statSync(filepath); } catch { return next(); }
+		let buffer;
+		try { buffer = read_asset(asset_url); }
+		catch (e) {
+			console.error('[assets] read failed:', asset_url, e);
+			res.writeHead(500, { 'Content-Type': 'text/plain' });
+			res.end('asset read error');
+			return;
+		}
 
 		/** @type {Record<string, string | number>} */
 		const headers = {
-			'Content-Type': get_mime(filepath),
-			'Content-Length': stat.size,
-			'Last-Modified': stat.mtime.toUTCString()
+			'Content-Type': get_mime(asset_url),
+			'Content-Length': buffer.byteLength
 		};
 		if (opts.immutable && pathname.startsWith(`/${manifest.appPath}/immutable/`)) {
 			headers['Cache-Control'] = 'public,max-age=31536000,immutable';
 		}
 		res.writeHead(200, headers);
-		fs.createReadStream(filepath).pipe(res);
+		res.end(buffer);
 	};
 }
 

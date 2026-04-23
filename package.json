@@ -20,6 +20,19 @@
   "peerDependencies": {
     "@sveltejs/kit": "^2.0.0"
   },
+  "dependencies": {
+    "bare-crypto": "^1.13.4",
+    "bare-fetch": "^2.8.2",
+    "bare-form-data": "^1.0.0",
+    "bare-fs": "^4.7.1",
+    "bare-http1": "^4.5.6",
+    "bare-module": "^6.2.0",
+    "bare-native": "^0.1.2",
+    "bare-process": "^4.4.1",
+    "bare-stream": "^2.9.1",
+    "bare-url": "^2.4.2",
+    "paparam": "^1.10.1"
+  },
   "devDependencies": {
     "brittle": "^3.19.0",
     "lunte": "^1.2.0",

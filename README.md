@@ -10,13 +10,7 @@ A SvelteKit [adapter](https://svelte.dev/docs/kit/adapters) that produces a serv
 npm install --save-dev sveltekit-adapter-bare
 ```
 
-You'll also need the bare runtime deps that the emitted server expects at runtime. At minimum:
-
-```sh
-npm install bare-http1 bare-fs bare-process bare-url bare-crypto \
-            bare-stream bare-fetch bare-form-data bare-native \
-            bare-events bare-path bare-buffer paparam
-```
+All bare runtime deps (`bare-http1`, `bare-fs`, `bare-native`, `bare-fetch`, `bare-form-data`, `paparam`, etc.) are pulled in transitively — you don't need to declare them in your own `package.json`.
 
 ## Configure
 
@@ -70,12 +64,13 @@ Swap `--host` / `--out` to target a different platform (`linux-x64`, `android-ar
 The emitted entry (`build/index.js`) is a small `paparam` CLI that spins up `bare-http1`, opens a `bare-native` window, and loads `http://localhost:<port>`:
 
 ```sh
-./build/<platform>/<name>.app --host 0.0.0.0 --port 3000 --width 800 --height 600 --inspectable
+./build/<platform>/<name>.app --width 800 --height 600 --inspectable
 ```
 
 Flags:
 
-- `--host`, `--port` — where the embedded HTTP server listens.
+- `--host` (default `0.0.0.0`) — interface to listen on.
+- `--port` (default `0`) — TCP port. `0` asks the OS for a free port; the chosen port is logged at startup and handed to the WebView automatically.
 - `--width`, `--height` — native window size.
 - `--inspectable` — enable the WebView's remote inspector (connect from desktop Chrome via `chrome://inspect`).
 
