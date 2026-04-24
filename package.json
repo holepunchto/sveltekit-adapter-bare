@@ -1,6 +1,6 @@
 {
   "name": "sveltekit-adapter-bare",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "sveltekit-adapter-bare",
   "main": "index.js",
   "exports": {
