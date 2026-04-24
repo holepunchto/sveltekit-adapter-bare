@@ -31,14 +31,14 @@
     "bare-process": "^4.4.1",
     "bare-stream": "^2.9.1",
     "bare-url": "^2.4.2",
+    "esbuild": "^0.28.0",
     "paparam": "^1.10.1"
   },
   "devDependencies": {
     "brittle": "^3.19.0",
     "lunte": "^1.2.0",
     "prettier": "^3.6.2",
-    "prettier-config-holepunch": "^2.0.0",
-    "esbuild": "^0.28.0"
+    "prettier-config-holepunch": "^2.0.0"
   },
   "scripts": {
     "format": "prettier . --write",
