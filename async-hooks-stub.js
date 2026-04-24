@@ -4,36 +4,58 @@
 // requests would see each other's context — not a concern here.
 
 export class AsyncLocalStorage {
-	#store;
+  #store
 
-	run (store, fn, ...args) {
-		const prev = this.#store;
-		this.#store = store;
-		try {
-			return fn(...args);
-		} finally {
-			this.#store = prev;
-		}
-	}
+  run(store, fn, ...args) {
+    const prev = this.#store
+    this.#store = store
+    try {
+      return fn(...args)
+    } finally {
+      this.#store = prev
+    }
+  }
 
-	getStore () { return this.#store; }
-	enterWith (store) { this.#store = store; }
-	exit (fn, ...args) {
-		const prev = this.#store;
-		this.#store = undefined;
-		try { return fn(...args); } finally { this.#store = prev; }
-	}
-	disable () {}
-	enable () {}
+  getStore() {
+    return this.#store
+  }
+  enterWith(store) {
+    this.#store = store
+  }
+  exit(fn, ...args) {
+    const prev = this.#store
+    this.#store = undefined
+    try {
+      return fn(...args)
+    } finally {
+      this.#store = prev
+    }
+  }
+  disable() {}
+  enable() {}
 }
 
 export class AsyncResource {
-	constructor (type) { this.type = type; }
-	runInAsyncScope (fn, thisArg, ...args) { return fn.apply(thisArg, args); }
-	static bind (fn) { return fn; }
-	bind (fn) { return fn; }
+  constructor(type) {
+    this.type = type
+  }
+  runInAsyncScope(fn, thisArg, ...args) {
+    return fn.apply(thisArg, args)
+  }
+  static bind(fn) {
+    return fn
+  }
+  bind(fn) {
+    return fn
+  }
 }
 
-export function createHook () { return { enable () {}, disable () {} }; }
-export function executionAsyncId () { return 0; }
-export function triggerAsyncId () { return 0; }
+export function createHook() {
+  return { enable() {}, disable() {} }
+}
+export function executionAsyncId() {
+  return 0
+}
+export function triggerAsyncId() {
+  return 0
+}

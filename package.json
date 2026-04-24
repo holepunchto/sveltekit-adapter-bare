@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "bare-crypto": "^1.13.4",
+    "bare-encoding": "^1.0.3",
     "bare-fetch": "^2.8.2",
     "bare-form-data": "^1.0.0",
     "bare-fs": "^4.7.1",
