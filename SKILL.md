@@ -343,6 +343,49 @@ export const load = async ({ locals }) => ({
 });
 ```
 
+## Blind peers don't show up on the swarm
+
+`blind-peering` connects to its mirror peers via `dht.connect(remotePublicKey)` directly — it bypasses `Hyperswarm` entirely. That means `swarm.on('connection')` never fires for blind peers, and any peer count derived only from swarm state will under-report.
+
+If your UI shows a "peer connections" number, it must include blind peers. The `BlindPeering` instance exposes `blindPeers: Map<string, BlindPeer>` where each entry has a `.connected: boolean`. The `BlindPeer` class doesn't emit lifecycle events, so to keep a live count the hub needs to poll on a low cadence (one timer per process, fanned out via `'stats'` only when the count actually changed):
+
+```ts
+// in EventHub.attach(db)
+this.blind = (db as any).blind ?? null;
+if (this.blind) {
+  this.recountBlindPeers();
+  this.blindPoll = setInterval(() => {
+    if (this.recountBlindPeers()) this.emit('stats');
+  }, 2000);
+}
+
+private recountBlindPeers(): boolean {
+  let n = 0;
+  for (const bp of this.blind.blindPeers.values()) if (bp.connected) n++;
+  if (n === this.blindPeerCount) return false;
+  this.blindPeerCount = n;
+  return true;
+}
+
+getStats() {
+  return {
+    peers: this.peerKeys.size + this.blindPeerCount,
+    swarmPeers: this.peerKeys.size,
+    blindPeers: this.blindPeerCount,
+    dhtNodes: this.swarm?.dht?.nodes?.length ?? 0
+  };
+}
+```
+
+Also recount on swarm connection open/close — when the local network comes up, blind peers usually reconnect around the same time, and recounting opportunistically beats waiting for the next poll tick.
+
+Expose `get blind()` on the db class so the hub doesn't have to reach into private fields:
+
+```js
+// in GipLocalDB
+get blind() { return this._blind }
+```
+
 ## Hyperswarm gotcha: `join` vs `refresh`
 
 This one bit Gear hard. Calling `swarm.join(topic, opts)` a second time does NOT mutate the existing discovery — it adds a SECOND `PeerDiscoverySession` for the same topic. Your old `{ server: true }` session keeps announcing while the new `{ server: false }` session quietly does nothing useful. To toggle announce/lookup on a topic you've already joined:
