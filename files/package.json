@@ -15,7 +15,6 @@
   "dependencies": {
     "bare-crypto": "^1.13.4",
     "bare-fetch": "^2.8.2",
-    "bare-form-data": "^1.0.0",
     "bare-fs": "^4.7.1",
     "bare-http1": "^4.5.6",
     "bare-module": "^6.2.0",
