@@ -122,18 +122,93 @@ export const load: LayoutServerLoad = ({ locals, depends }) => {
 - Never `await` in the return of a load function unless the data is needed for SSR rendering of the shell
 - Never use `.then()` chains — use named `async` functions or `{#await}` instead
 - Never use `Promise.resolve(x)` as a workaround — just use `x` or `{#await}` directly
-- If you need a redirect based on async state, do it server-side in the load function (inside the async work), not client-side after page load
+- **Never use `throw redirect()` anywhere** — server-side redirects break Android. Always navigate with client-side `goto()`
+
+## No server-side redirects — always use `goto()`
+
+`throw redirect(303, ...)` in load functions or form actions breaks Android navigation. Every redirect must be client-side.
+
+**Load function that needs to redirect**: return a streamed Promise, let the client `goto()` when it resolves.
 
 ```ts
-// Server-side redirect is clean:
-export const load: PageServerLoad = async ({ locals, url }) => {
+// +page.server.ts
+export const load: PageServerLoad = ({ locals, url }) => {
   if (url.searchParams.get('action')) return {};
-  await locals.app.ready();
-  const sessions = await locals.app.db.find(...).toArray();
-  const last = sessions.sort(...)[0];
-  if (last) throw redirect(303, `/drive/${last.id}`);
-  return {};
+  return { autoOpen: findLastSession(locals.app) }; // Promise<string | null>
 };
+
+async function findLastSession(app: GhostDriveApp | null): Promise<string | null> {
+  if (!app) return null;
+  await app.ready();
+  const all = await app.db!.find(...).toArray() as any[];
+  const last = all.sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0))[0];
+  return (last && app.sessions.has(last.id)) ? last.id : null;
+}
+```
+
+```svelte
+<!-- +page.svelte -->
+<script lang="ts">
+  import { goto } from '$app/navigation';
+  let { data } = $props();
+
+  async function autoNavigate(p: Promise<string | null> | undefined) {
+    if (!p) return;
+    const id = await p;
+    if (id) goto(`/drive/${id}`);
+  }
+
+  $effect(() => { autoNavigate(data.autoOpen); });
+</script>
+```
+
+**Form actions that need to redirect**: return `{ redirect: '/path' }` from the action, call `goto()` in the enhance callback.
+
+```ts
+// +page.server.ts
+export const actions: Actions = {
+  create: async ({ locals, request }) => {
+    const session = await locals.app.createSession({ name });
+    return { redirect: `/drive/${session.id}` }; // NOT throw redirect
+  }
+}
+```
+
+```svelte
+<!-- +page.svelte -->
+<form method="POST" action="?/create"
+  use:enhance={() => async ({ result }) => {
+    if (result.type === 'success' && result.data?.redirect) {
+      goto(result.data.redirect as string);
+    }
+  }}>
+```
+
+**Form actions that only need to refresh data**: return `{}` and let the default `use:enhance` call `invalidateAll()`.
+
+```ts
+// server — no redirect needed
+return {};
+```
+
+```svelte
+<!-- client — bare use:enhance calls invalidateAll() on success -->
+<form method="POST" action="?/addDrive" use:enhance>
+```
+
+**Form actions that navigate away**: return `{}` from server, call `goto()` directly in enhance without calling `update()`.
+
+```ts
+// server
+deleteSession: async ({ locals, params }) => {
+  await locals.app.removeSession(params.id);
+  return {};
+}
+```
+
+```svelte
+<form method="POST" action="?/deleteSession"
+  use:enhance={() => async () => { goto('/'); }}>
 ```
 
 ## Loaders pattern: `$lib/server/loaders.ts`
@@ -521,6 +596,7 @@ Track the `discovery` handle returned by the original `join()`.
 
 ## Common pitfalls
 
+- **`throw redirect()` in any server file** — breaks Android navigation. Return `{ redirect: '/path' }` and call `goto()` in the enhance callback instead.
 - **Blocking in layout.server.ts** — `await locals.app.ready()` before returning causes a white screen. Stream instead.
 - **`.then()` chains** — use named async functions or `{#await}`. `.then()` is hard to read and can't use `await` inside.
 - **`Promise.resolve(x)` antipattern** — just use `x` directly or `{#await data.x}` in the template.
