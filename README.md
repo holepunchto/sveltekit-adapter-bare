@@ -117,7 +117,6 @@ Flags:
 - Patches out SvelteKit's lazy `obfuscated_import("node:crypto")` fallback — `globalThis.crypto` is assigned at startup from `bare-crypto`.
 - Stubs `node:async_hooks` (bare doesn't ship an equivalent; SvelteKit's `AsyncLocalStorage` usage works against a minimal shim).
 - Emits an `assets.js` module with one static `import.meta.asset()` call per file in `client/` and `prerendered/`, so `bare-module-traverse` preserves every static asset when `bare-build` bundles the app.
-- Polyfills `Request.prototype.formData()` on top of `bare-fetch`, supporting `application/x-www-form-urlencoded` and simple `multipart/form-data` (text fields) so SvelteKit form actions work.
 - Correctly forwards multiple `Set-Cookie` headers using `getSetCookie()` instead of flattening them.
 
 ## Known limitations
