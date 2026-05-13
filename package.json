@@ -3,6 +3,7 @@
   "version": "0.1.5",
   "description": "sveltekit-adapter-bare",
   "main": "index.js",
+  "type": "module",
   "exports": {
     "./package": "./package.json",
     ".": {

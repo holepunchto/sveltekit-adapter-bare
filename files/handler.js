@@ -171,10 +171,18 @@ const ssr = async (/** @type {any} */ req, /** @type {any} */ res) => {
     getClientAddress: () => req.socket?.remoteAddress ?? '127.0.0.1'
   })
 
-  /** @type {Record<string, string>} */
+  /** @type {Record<string, string | string[]>} */
   const headers = {}
   for (const [key, value] of response.headers) {
+    if (key.toLowerCase() === 'set-cookie') continue
     headers[key] = value
+  }
+  // Headers iteration merges duplicate values — getSetCookie() is the only
+  // reliable way to retrieve individual Set-Cookie entries
+  if (typeof response.headers.getSetCookie === 'function') {
+    const cookies = response.headers.getSetCookie()
+    if (cookies.length === 1) headers['set-cookie'] = cookies[0]
+    else if (cookies.length > 1) headers['set-cookie'] = cookies
   }
   res.writeHead(response.status, headers)
 
