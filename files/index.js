@@ -44,9 +44,13 @@ async function shutdown() {
     await Promise.all(handlers.map((fn) => Promise.resolve().then(fn)))
   }
 
-  try { server.close() } catch {}
+  try {
+    server.close()
+  } catch {}
   // Closing the native window handle lets the AppKit/GTK event loop exit cleanly
-  try { win?._native?.close() } catch {}
+  try {
+    win?._native?.close()
+  } catch {}
   process.exit(0)
 }
 
