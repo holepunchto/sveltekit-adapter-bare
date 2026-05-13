@@ -30,10 +30,9 @@ const config = {
     runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
   },
   kit: {
-    // adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
-    // If your environment is not supported, or you settled on a specific environment, switch out the adapter.
-    // See https://svelte.dev/docs/kit/adapters for more information about adapters.
-    adapter: adapter(),
+    adapter: adapter({
+      window: { width: 1200, height: 800, inspectable: false }
+    }),
     csrf: { checkOrigin: false }
   }
 }
@@ -43,9 +42,43 @@ export default config
 
 Options:
 
-| option | default   | description                          |
-| ------ | --------- | ------------------------------------ |
-| `out`  | `'build'` | Directory to emit the server bundle. |
+| option | default | description |
+| --- | --- | --- |
+| `out` | `'build'` | Directory to emit the server bundle. |
+| `window.width` | `800` | Native window width in pixels. |
+| `window.height` | `600` | Native window height in pixels. |
+| `window.inspectable` | `false` | Enable the WebView's remote DevTools inspector. |
+
+## Vite plugin
+
+Add `vitePlugin()` to `vite.config.ts` to automatically externalize all `bare-*` packages from Vite's SSR bundler. Without this, Vite tries to bundle native Bare modules and fails.
+
+```ts
+import { vitePlugin as bareExternals } from 'sveltekit-adapter-bare'
+import { sveltekit } from '@sveltejs/kit/vite'
+import { defineConfig } from 'vite'
+
+export default defineConfig({
+  plugins: [sveltekit(), bareExternals()],
+  ssr: {
+    // vitePlugin handles bare-* automatically; add non-bare holepunch packages manually:
+    external: ['distributed-drive', 'hyperdb', 'corestore', 'hyperswarm', 'hyperdrive', ...]
+  }
+})
+```
+
+## Graceful shutdown and `sveltekit:close`
+
+The adapter fires `sveltekit:close` on process exit (Ctrl-C, SIGTERM, and native window close). Use it to tear down long-lived resources:
+
+```ts
+// src/hooks.server.ts
+process.on('sveltekit:close', async () => {
+  await app?.close()
+})
+```
+
+**macOS window close caveat**: `AppKitWindow` emits `will-close` but the `NativeWindow` wrapper does not forward it. The adapter hooks `win._native?.on?.('will-close', shutdown)` directly, so Ctrl-X on the window triggers the same clean shutdown as Ctrl-C.
 
 ## Build
 
@@ -75,7 +108,7 @@ Flags:
 
 - `--host` (default `0.0.0.0`) — interface to listen on.
 - `--port` (default `0`) — TCP port. `0` asks the OS for a free port; the chosen port is logged at startup and handed to the WebView automatically.
-- `--width`, `--height` — native window size.
+- `--width`, `--height` — native window size (override `window` option from `svelte.config.js`).
 - `--inspectable` — enable the WebView's remote inspector (connect from desktop Chrome via `chrome://inspect`).
 
 ## What the adapter does
@@ -85,12 +118,12 @@ Flags:
 - Stubs `node:async_hooks` (bare doesn't ship an equivalent; SvelteKit's `AsyncLocalStorage` usage works against a minimal shim).
 - Emits an `assets.js` module with one static `import.meta.asset()` call per file in `client/` and `prerendered/`, so `bare-module-traverse` preserves every static asset when `bare-build` bundles the app.
 - Polyfills `Request.prototype.formData()` on top of `bare-fetch`, supporting `application/x-www-form-urlencoded` and simple `multipart/form-data` (text fields) so SvelteKit form actions work.
+- Correctly forwards multiple `Set-Cookie` headers using `getSetCookie()` instead of flattening them.
 
 ## Known limitations
 
 - `multipart/form-data` file uploads are not implemented (text fields only).
 - No HTTPS, no clustering, no compression, no range requests.
-- Android not working yet for multi page
 
 ## License
 
