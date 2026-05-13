@@ -38,6 +38,109 @@ If you only remember five things:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Project scaffolding
+
+### `package.json`
+
+Every Bare SvelteKit app needs these exact groups. Missing any of the bare-\* runtime deps causes a silent build failure or a crash at startup.
+
+**Runtime dependencies** (bundled into the app):
+
+```json
+"dependencies": {
+  "bare-crypto":  "^1.13.6",
+  "bare-fetch":   "^3.0.1",
+  "bare-http1":   "^4.5.6",
+  "bare-module":  "^6.2.0",
+  "bare-native":  "^0.1.2",
+  "bare-process": "^4.4.1"
+}
+```
+
+**Dev dependencies**:
+
+```json
+"devDependencies": {
+  "bare-build":            "^0.5.5",
+  "sveltekit-adapter-bare": "...",
+  "@sveltejs/kit":         "...",
+  "svelte":                "...",
+  "vite":                  "..."
+}
+```
+
+**Build scripts** (substitute `<app>`, `<AppName>`, `com.<org>.<app>`):
+
+```json
+"scripts": {
+  "dev":          "vite dev",
+  "build":        "vite build",
+  "make:darwin":  "bare-build --out out/<app>-darwin-arm64 --host darwin-arm64 --icon <app>.png --name <AppName> --runtime bare-native/runtime build/index.js",
+  "make:android": "bare-build --out out/android-arm64 --resources resources/android --host android-arm64 --manifest manifest.xml --identifier com.<org>.<app> --name <AppName> --runtime bare-native/runtime build/index.js"
+}
+```
+
+> **Icon caveat**: `--icon <app>.png` requires a real PNG in the project root. This file cannot be auto-generated — ask the user to provide it before wiring up `make:darwin`. Do not synthesise a placeholder and proceed silently.
+
+### `svelte.config.js`
+
+Two settings beyond the adapter are required and non-obvious:
+
+1. **`runes` scoped** — enforce runes mode only outside `node_modules`; some Holepunch deps don't use runes and will break with `runes: true` globally.
+2. **`csrf: { checkOrigin: false }`** — form actions are broken without this inside Bare (the request origin never matches the server origin).
+
+```js
+import adapter from 'sveltekit-adapter-bare'
+
+const config = {
+  compilerOptions: {
+    runes: ({ filename }) =>
+      filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
+  },
+  kit: {
+    adapter: adapter({ window: { width: 1200, height: 800 } }),
+    csrf: { checkOrigin: false },
+  },
+}
+
+export default config
+```
+
+### `manifest.xml` (Android only)
+
+Required by `make:android`. Place it in the project root. Minimum viable manifest — substitute `package`, `android:label`, and version fields:
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:versionCode="1"
+    android:versionName="1.0"
+    package="com.yourorg.yourapp"
+>
+  <uses-sdk android:minSdkVersion="31" android:targetSdkVersion="36" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+  <application
+        android:label="YourApp"
+        android:usesCleartextTraffic="true"
+        android:icon="@mipmap/ic_launcher"
+    >
+    <activity
+            android:name="to.holepunch.bare.Activity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+        >
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
+```
+
 ## Boot: `hooks.server.ts`
 
 Boot the stack at module load, not on first request. Register async teardown on `sveltekit:close`. Never block the handle function.
@@ -414,11 +517,23 @@ $effect(() => { repos = data.repos.map((r) => ({ ...r })); });
 
 ### Setup in `svelte.config.js`
 
+See [Project scaffolding → svelte.config.js](#project-scaffolding) for the full required config. The short version — `csrf` and scoped `runes` are both required:
+
 ```js
 import adapter from 'sveltekit-adapter-bare'
-export default {
-  kit: { adapter: adapter({ window: { width: 1200, height: 800, inspectable: false } }) }
+
+const config = {
+  compilerOptions: {
+    runes: ({ filename }) =>
+      filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
+  },
+  kit: {
+    adapter: adapter({ window: { width: 1200, height: 800 } }),
+    csrf: { checkOrigin: false },
+  },
 }
+
+export default config
 ```
 
 ### Vite plugin for auto-externalizing `bare-*` packages
@@ -596,6 +711,11 @@ Track the `discovery` handle returned by the original `join()`.
 
 ## Common pitfalls
 
+- **Missing bare-\* runtime deps** — `bare-crypto`, `bare-fetch`, `bare-http1`, `bare-module`, `bare-native`, `bare-process` must all be in `dependencies`. Omitting any causes a silent build failure or startup crash.
+- **`csrf: { checkOrigin: false }` missing from `svelte.config.js`** — form actions silently fail inside Bare because the request origin never matches the server. Required, not optional.
+- **`runes: true` globally in `compilerOptions`** — breaks any Holepunch dep that isn't in runes mode. Use the scoped form: `runes: ({ filename }) => filename.split(/[/\\]/).includes('node_modules') ? undefined : true`.
+- **`manifest.xml` missing for Android builds** — `make:android` fails immediately. Create the file in the project root (see scaffolding section for the template).
+- **`--icon` flag without a real PNG** — `make:darwin` requires a PNG in the project root. Do not auto-generate a placeholder; ask the user to provide it.
 - **`throw redirect()` in any server file** — breaks Android navigation. Return `{ redirect: '/path' }` and call `goto()` in the enhance callback instead.
 - **Blocking in layout.server.ts** — `await locals.app.ready()` before returning causes a white screen. Stream instead.
 - **`.then()` chains** — use named async functions or `{#await}`. `.then()` is hard to read and can't use `await` inside.
