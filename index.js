@@ -7,9 +7,40 @@ const files = fileURLToPath(new URL('./files', import.meta.url).href)
 const inject = fileURLToPath(new URL('./inject.js', import.meta.url).href)
 const async_hooks_stub = fileURLToPath(new URL('./async-hooks-stub.js', import.meta.url).href)
 
-/** @type {(opts?: { out?: string }) => import('@sveltejs/kit').Adapter} */
+/**
+ * Vite plugin that automatically marks bare-* packages as SSR-external so
+ * Vite doesn't try to bundle them during dev/preview. Add to vite.config.ts
+ * alongside the sveltekit() plugin.
+ * @returns {import('vite').Plugin}
+ */
+export function vitePlugin() {
+  return {
+    name: 'sveltekit-adapter-bare:externals',
+    enforce: 'pre',
+    config(cfg) {
+      let pkg
+      try {
+        pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+      } catch {
+        return
+      }
+      const all_deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })
+      const bare_pkgs = all_deps.filter((d) => d.startsWith('bare-'))
+      const entries = bare_pkgs.flatMap((d) => [d, `${d}/*`])
+      cfg.ssr = cfg.ssr ?? {}
+      const existing = Array.isArray(cfg.ssr.external) ? cfg.ssr.external : []
+      cfg.ssr.external = [...new Set([...existing, ...entries])]
+    }
+  }
+}
+
+/**
+ * @typedef {{ width?: number, height?: number, inspectable?: boolean }} WindowOpts
+ * @type {(opts?: { out?: string, window?: WindowOpts }) => import('@sveltejs/kit').Adapter}
+ */
 export default function (opts = {}) {
-  const { out = 'build' } = opts
+  const { out = 'build', window: win = {} } = opts
+  const { width = 800, height = 600, inspectable = false } = win
 
   return {
     name: 'adapter-bare',
@@ -57,7 +88,16 @@ export default function (opts = {}) {
         'node:timers': 'bare-timers',
         buffer: 'bare-buffer',
         stream: 'bare-stream',
+        fs: 'bare-fs',
+        'fs/promises': 'bare-fs',
+        path: 'bare-path',
+        url: 'bare-url',
+        crypto: 'bare-crypto',
+        process: 'bare-process',
+        module: 'bare-module',
+        os: 'bare-os',
         events: 'bare-events',
+        timers: 'bare-timers',
         'node:async_hooks': async_hooks_stub
       }
 
@@ -104,7 +144,10 @@ export default function (opts = {}) {
         replace: {
           HANDLER: './handler.js',
           MANIFEST: './server/manifest.js',
-          SERVER: './server/index.js'
+          SERVER: './server/index.js',
+          WINDOW_WIDTH: String(width),
+          WINDOW_HEIGHT: String(height),
+          WINDOW_INSPECTABLE: String(inspectable)
         }
       })
     },

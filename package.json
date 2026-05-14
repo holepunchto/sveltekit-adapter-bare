@@ -1,8 +1,9 @@
 {
   "name": "sveltekit-adapter-bare",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "sveltekit-adapter-bare",
   "main": "index.js",
+  "type": "module",
   "exports": {
     "./package": "./package.json",
     ".": {

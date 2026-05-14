@@ -1,20 +1,20 @@
 ---
 name: svelte-bare-app
-description: This skill should be used when building, modifying, or debugging a SvelteKit application running on the Bare runtime with the Holepunch / pear stack (Hypercore, Hyperswarm, Hyperbee, HyperDB, Corestore, BlindPeering). Triggers on requests mentioning "svelte bare app", "SvelteKit on bare", "P2P svelte", "gear", "SSE in SvelteKit", "hyperswarm + svelte", "live stats stream", or any task that involves wiring SvelteKit server endpoints to a long-lived P2P stack. Covers hooks.server.ts boot, $lib/server boundaries, globalThis singletons, the shared EventHub SSE pattern, form actions with use:enhance, and the gotchas that bite specifically in this combination (Bare's missing Node globals, Hyperswarm session semantics, Svelte 5 runes self-reference traps).
-version: 1.0.0
+description: This skill should be used when building, modifying, or debugging a SvelteKit application running on the Bare runtime with the Holepunch / pear stack (Hypercore, Hyperswarm, Hyperbee, HyperDB, Corestore, DistributedDrive, Localdrive, Hyperdrive). Triggers on requests mentioning "svelte bare app", "SvelteKit on bare", "P2P svelte", "sveltekit-adapter-bare", "SSE in SvelteKit", "hyperswarm + svelte", "live stats stream", "ghost drive", or any task that involves wiring SvelteKit server endpoints to a long-lived P2P stack. Covers hooks.server.ts boot, $lib/server boundaries, TypeScript for untyped holepunch packages, SvelteKit streaming with {#await}, form actions with use:enhance, and the gotchas that bite specifically in this combination (Bare's missing Node globals, Hyperswarm session semantics, Svelte 5 runes, white screen on boot).
+version: 2.0.0
 ---
 
-# Svelte + Bare app
+# SvelteKit + Bare app
 
-A SvelteKit app whose server side runs inside the Bare runtime and owns a long-lived P2P stack (Corestore + Hyperswarm + HyperDB). The reference implementation is **Gear**, a P2P GitHub replacement wrapping `gip-transport` / `gip-remote`.
+A SvelteKit application whose server side runs inside the Bare runtime and owns a long-lived P2P stack (Corestore + Hyperswarm + HyperDB / DistributedDrive). The server is a singleton; the browser only ever talks to SvelteKit endpoints.
 
-This skill captures the patterns and pitfalls that are specific to that combination — they aren't in the SvelteKit docs because they're about wiring SvelteKit to a stateful peer-to-peer backend, and they aren't in the Holepunch docs because they're about doing it from inside SvelteKit.
+If you only remember five things:
 
-If you only remember three things:
-
-1. **The server stack is a long-lived singleton, not request-scoped.** Stash it on `globalThis` and warm it from `hooks.server.ts`.
-2. **One SSE stream + one shared EventEmitter hub beats N polling timers.** Fan out from real swarm/core events.
-3. **Hyperswarm `swarm.join()` adds a NEW session each call.** To mutate announce/lookup state for an already-joined topic, call `discovery.refresh()` on the existing session.
+1. **Never block rendering.** Every load function must return immediately — put async work in a `Promise` value so SvelteKit can stream. Use `{#await}` in templates, never `.then()` chains.
+2. **The server stack is a long-lived singleton, not request-scoped.** Boot it in `hooks.server.ts`; park it on `event.locals`.
+3. **All load logic lives in `$lib/server/loaders.ts`.** Route server files are thin coordinators that import from loaders and return streamed promises.
+4. **TypeScript for the untyped holepunch world.** Use `src/lib/server/ambient.d.ts` for bare-\* and holepunch packages that ship no types. Use `import type` for circular deps between server modules.
+5. **`sveltekit:close` is your cleanup hook.** Register teardown in `process.on('sveltekit:close', ...)` inside `hooks.server.ts`.
 
 ## Architecture at a glance
 
@@ -22,449 +22,718 @@ If you only remember three things:
 ┌─────────────────────────────────────────────────────────────────┐
 │  Bare process                                                   │
 │  ┌────────────────────────────────────────────────────────────┐ │
-│  │  SvelteKit (Node-style adapter)                            │ │
+│  │  SvelteKit (sveltekit-adapter-bare)                        │ │
 │  │                                                            │ │
-│  │  hooks.server.ts ──► getDB() ──► globalThis.__db           │ │
-│  │       │                                                    │ │
-│  │       └──► events.attach(db) ──► globalThis.__eventHub     │ │
+│  │  hooks.server.ts ──► GhostDriveApp ──► event.locals.app   │ │
 │  │                                                            │ │
-│  │  $lib/server/*  ◄── routes/**/+page.server.ts              │ │
-│  │  $lib/server/*  ◄── routes/**/+server.ts (incl. SSE)       │ │
+│  │  $lib/server/loaders.ts  ◄── routes/**/+page.server.ts    │ │
+│  │  $lib/server/app.ts                                        │ │
+│  │  $lib/server/session.ts                                    │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                                                                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │  Long-lived stack                                          │ │
-│  │  Corestore ── Hyperswarm ── BlindPeering                   │ │
-│  │      │            │                                        │ │
-│  │      └─ HyperDB / Hyperbee per repo                        │ │
+│  │  Corestore ── Hyperswarm ── HyperDB ── DistributedDrive   │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The browser never talks to Hyperswarm. It talks to SvelteKit endpoints (form actions, `+server.ts`, SSE). Server endpoints talk to the singletons.
+## Project scaffolding
+
+### `package.json`
+
+Every Bare SvelteKit app needs these exact groups. Missing any of the bare-\* runtime deps causes a silent build failure or a crash at startup.
+
+**Runtime dependencies** (bundled into the app):
+
+```json
+"dependencies": {
+  "bare-crypto":  "^1.13.6",
+  "bare-fetch":   "^3.0.1",
+  "bare-http1":   "^4.5.6",
+  "bare-module":  "^6.2.0",
+  "bare-native":  "^0.1.2",
+  "bare-process": "^4.4.1"
+}
+```
+
+**Dev dependencies**:
+
+```json
+"devDependencies": {
+  "bare-build":            "^0.5.5",
+  "sveltekit-adapter-bare": "...",
+  "@sveltejs/kit":         "...",
+  "svelte":                "...",
+  "vite":                  "..."
+}
+```
+
+**Build scripts** (substitute `<app>`, `<AppName>`, `com.<org>.<app>`):
+
+```json
+"scripts": {
+  "dev":          "vite dev",
+  "build":        "vite build",
+  "make:darwin":  "bare-build --out out/<app>-darwin-arm64 --host darwin-arm64 --icon <app>.png --name <AppName> --runtime bare-native/runtime build/index.js",
+  "make:android": "bare-build --out out/android-arm64 --resources resources/android --host android-arm64 --manifest manifest.xml --identifier com.<org>.<app> --name <AppName> --runtime bare-native/runtime build/index.js"
+}
+```
+
+> **Icon caveat**: `--icon <app>.png` requires a real PNG in the project root. This file cannot be auto-generated — ask the user to provide it before wiring up `make:darwin`. Do not synthesise a placeholder and proceed silently.
+
+### `svelte.config.js`
+
+Two settings beyond the adapter are required and non-obvious:
+
+1. **`runes` scoped** — enforce runes mode only outside `node_modules`; some Holepunch deps don't use runes and will break with `runes: true` globally.
+2. **`csrf: { checkOrigin: false }`** — form actions are broken without this inside Bare (the request origin never matches the server origin).
+
+```js
+import adapter from 'sveltekit-adapter-bare'
+
+const config = {
+  compilerOptions: {
+    runes: ({ filename }) =>
+      filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
+  },
+  kit: {
+    adapter: adapter({ window: { width: 1200, height: 800 } }),
+    csrf: { checkOrigin: false },
+  },
+}
+
+export default config
+```
+
+### `manifest.xml` (Android only)
+
+Required by `make:android`. Place it in the project root. Minimum viable manifest — substitute `package`, `android:label`, and version fields:
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:versionCode="1"
+    android:versionName="1.0"
+    package="com.yourorg.yourapp"
+>
+  <uses-sdk android:minSdkVersion="31" android:targetSdkVersion="36" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+  <application
+        android:label="YourApp"
+        android:usesCleartextTraffic="true"
+        android:icon="@mipmap/ic_launcher"
+    >
+    <activity
+            android:name="to.holepunch.bare.Activity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+        >
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
+```
 
 ## Boot: `hooks.server.ts`
 
-The whole P2P stack must be alive before the first request hits. Warm it in `hooks.server.ts` and stash the promise. Every `handle` awaits it and parks `db` on `event.locals`.
+Boot the stack at module load, not on first request. Register async teardown on `sveltekit:close`. Never block the handle function.
 
 ```ts
 // src/hooks.server.ts
-import type { Handle } from '@sveltejs/kit';
-import { getDB } from '$lib/server/gip';
-import { events } from '$lib/server/events';
+import type { Handle } from '@sveltejs/kit'
+import { building } from '$app/environment'
+import GhostDriveApp from '$lib/server/app.js'
+import storage from 'bare-storage'
+import path from 'path'
 
-// Warm the singletons at module load — not on first request. The
-// promise resolves once and every handle awaits the same one.
-const dbPromise = getDB().then(async (db) => {
-  events.attach(db);
-  return db;
-});
+let app: GhostDriveApp | null = null
 
-export const handle: Handle = async ({ event, resolve }) => {
-  event.locals.db = await dbPromise;
-  return resolve(event);
-};
+if (!building && !app) {
+  const dir = path.join(storage.persistent(), 'ghost-drive')
+  app = new GhostDriveApp({ dir })
+  app
+    .ready()
+    .then(() => console.log('ready, key:', app!.key!.toString('hex')))
+    .catch((err: Error) => console.error('boot failed:', err))
+
+  process.on('sveltekit:close', async () => {
+    try {
+      await app?.close()
+    } catch {}
+  })
+}
+
+export const handle: Handle = ({ event, resolve }) => {
+  event.locals.app = app
+  return resolve(event)
+}
 ```
 
-`event.locals.db` needs to be typed in `src/app.d.ts`:
+`app.ready()` is fire-and-forget — the handle never awaits it. Individual load functions call `await app.ready()` lazily, inside the promise they stream back. This means the first request returns HTML immediately while the P2P stack warms up in the background.
+
+Wire the type in `src/app.d.ts`:
 
 ```ts
+import type GhostDriveApp from '$lib/server/app'
 declare global {
   namespace App {
     interface Locals {
-      db: import('$lib/server/gip').GipDB;
+      app: import('$lib/server/app').default | null
     }
   }
 }
-export {};
+export {}
 ```
+
+## Never block rendering — SvelteKit streaming
+
+**The white-screen bug**: if `+layout.server.ts` or `+page.server.ts` does `await locals.app.ready()` before returning, SvelteKit cannot send the initial HTML until that resolves. On cold boot this takes seconds. Use streaming instead.
+
+**Pattern**: return a `Promise` as a data property. SvelteKit sends the shell HTML immediately, then streams the resolved value.
+
+```ts
+// src/routes/+layout.server.ts
+import type { LayoutServerLoad } from './$types'
+import { loadSessions } from '$lib/server/loaders'
+
+export const load: LayoutServerLoad = ({ locals, depends }) => {
+  depends('app:layout')
+  return { sessions: loadSessions(locals.app) } // Promise, not awaited
+}
+```
+
+```svelte
+<!-- +layout.svelte -->
+{#await data.sessions}
+  <Sidebar sessions={[]} />
+{:then sessions}
+  <Sidebar {sessions} />
+{:catch}
+  <Sidebar sessions={[]} />
+{/await}
+```
+
+**Rules:**
+
+- Never `await` in the return of a load function unless the data is needed for SSR rendering of the shell
+- Never use `.then()` chains — use named `async` functions or `{#await}` instead
+- Never use `Promise.resolve(x)` as a workaround — just use `x` or `{#await}` directly
+- **Never use `throw redirect()` anywhere** — server-side redirects break Android. Always navigate with client-side `goto()`
+
+## No server-side redirects — always use `goto()`
+
+`throw redirect(303, ...)` in load functions or form actions breaks Android navigation. Every redirect must be client-side.
+
+**Load function that needs to redirect**: return a streamed Promise, let the client `goto()` when it resolves.
+
+```ts
+// +page.server.ts
+export const load: PageServerLoad = ({ locals, url }) => {
+  if (url.searchParams.get('action')) return {};
+  return { autoOpen: findLastSession(locals.app) }; // Promise<string | null>
+};
+
+async function findLastSession(app: GhostDriveApp | null): Promise<string | null> {
+  if (!app) return null;
+  await app.ready();
+  const all = await app.db!.find(...).toArray() as any[];
+  const last = all.sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0))[0];
+  return (last && app.sessions.has(last.id)) ? last.id : null;
+}
+```
+
+```svelte
+<!-- +page.svelte -->
+<script lang="ts">
+  import { goto } from '$app/navigation';
+  let { data } = $props();
+
+  async function autoNavigate(p: Promise<string | null> | undefined) {
+    if (!p) return;
+    const id = await p;
+    if (id) goto(`/drive/${id}`);
+  }
+
+  $effect(() => { autoNavigate(data.autoOpen); });
+</script>
+```
+
+**Form actions that need to redirect**: return `{ redirect: '/path' }` from the action, call `goto()` in the enhance callback.
+
+```ts
+// +page.server.ts
+export const actions: Actions = {
+  create: async ({ locals, request }) => {
+    const session = await locals.app.createSession({ name });
+    return { redirect: `/drive/${session.id}` }; // NOT throw redirect
+  }
+}
+```
+
+```svelte
+<!-- +page.svelte -->
+<form method="POST" action="?/create"
+  use:enhance={() => async ({ result }) => {
+    if (result.type === 'success' && result.data?.redirect) {
+      goto(result.data.redirect as string);
+    }
+  }}>
+```
+
+**Form actions that only need to refresh data**: return `{}` and let the default `use:enhance` call `invalidateAll()`.
+
+```ts
+// server — no redirect needed
+return {};
+```
+
+```svelte
+<!-- client — bare use:enhance calls invalidateAll() on success -->
+<form method="POST" action="?/addDrive" use:enhance>
+```
+
+**Form actions that navigate away**: return `{}` from server, call `goto()` directly in enhance without calling `update()`.
+
+```ts
+// server
+deleteSession: async ({ locals, params }) => {
+  await locals.app.removeSession(params.id);
+  return {};
+}
+```
+
+```svelte
+<form method="POST" action="?/deleteSession"
+  use:enhance={() => async () => { goto('/'); }}>
+```
+
+## Loaders pattern: `$lib/server/loaders.ts`
+
+All async server logic goes in `$lib/server/loaders.ts`. Route server files stay thin — they call loaders and return the results.
+
+```ts
+// src/lib/server/loaders.ts
+import { error } from '@sveltejs/kit'
+import type GhostDriveApp from './app.js'
+import type DriveSession from './session.js'
+
+export interface DriveInfo {
+  id: string
+  name: string
+  peerCount: number
+  isGuest: boolean
+}
+export interface DriveEntry {
+  name: string
+  isFolder: boolean
+  cached: boolean
+}
+export interface PeerInfo {
+  key: string
+  short: string
+  online: boolean
+}
+
+export async function getSession(app: GhostDriveApp, id: string): Promise<DriveSession> {
+  await app.ready()
+  const session = app.getSession(id)
+  if (!session) throw error(404, 'Drive not found')
+  return session
+}
+
+export async function loadDrive(app: GhostDriveApp, id: string): Promise<DriveInfo> {
+  const session = await getSession(app, id)
+  app.updateSession(id).catch(() => {})
+  return {
+    id: session.id,
+    name: session.name,
+    peerCount: session.peerCount,
+    isGuest: session.isGuest
+  }
+}
+
+export async function loadEntries(
+  app: GhostDriveApp,
+  id: string,
+  dirPath: string
+): Promise<DriveEntry[]> {
+  const session = await getSession(app, id)
+  const result: DriveEntry[] = []
+  for await (const item of session.drive!.readdir(dirPath)) {
+    // ...
+  }
+  return result
+}
+```
+
+```ts
+// src/routes/drive/[id]/+page.server.ts — thin coordinator
+import { loadDrive, loadEntries } from '$lib/server/loaders'
+
+export const load: PageServerLoad = ({ locals, params, url }) => {
+  const dirPath = url.searchParams.get('path') || '/'
+  return {
+    path: dirPath,
+    drive: loadDrive(locals.app, params.id), // Promise, streamed
+    entries: loadEntries(locals.app, params.id, dirPath) // Promise, streamed
+  }
+}
+```
+
+## TypeScript for untyped holepunch packages
+
+Most holepunch packages ship no TypeScript types. Use `src/lib/server/ambient.d.ts` for ambient module declarations.
+
+```ts
+// src/lib/server/ambient.d.ts
+declare module 'ready-resource' {
+  export default class ReadyResource {
+    readonly opened: boolean
+    readonly closed: boolean
+    ready(): Promise<void>
+    close(): Promise<void>
+    emit(event: string, ...args: unknown[]): boolean
+    on(event: string, listener: (...args: unknown[]) => void): this
+    protected _open(): Promise<void>
+    protected _close(): Promise<void>
+  }
+}
+
+declare module 'corestore' {
+  export default class Corestore {
+    constructor(path: string)
+    ready(): Promise<void>
+    close(): Promise<void>
+    createKeyPair(name: string): Promise<{ publicKey: Buffer; secretKey: Buffer }>
+    replicate(conn: unknown): unknown
+    session(): Corestore
+  }
+}
+
+declare module 'localdrive' {
+  export default class Localdrive {
+    constructor(path: string)
+    ready(): Promise<void>
+    close(): Promise<void>
+    get(path: string, opts?: object): Promise<any>
+    list(prefix?: string, opts?: object): AsyncIterable<any>
+    readdir(prefix: string): AsyncIterable<string>
+    entry(path: string): Promise<any>
+    batch(): { del(key: string): Promise<void>; flush(): Promise<void> }
+    mirror(dest: unknown, opts?: object): { done(): Promise<void> }
+  }
+}
+
+declare module 'bare-storage' {
+  const storage: { persistent(): string; ephemeral(): string }
+  export default storage
+}
+// ... etc for hyperswarm, hyperdb, hyperbee, b4a, sodium-native
+```
+
+**Key rules:**
+
+- If a package ships its own `index.d.ts` (e.g. `distributed-drive`, `hyperdrive`), your ambient declaration for it is IGNORED — TypeScript uses the package's types. Cast with `as any` at call sites where the shipped types are incomplete:
+  ```ts
+  this.drive!.register(local as any) // Drive interface mismatch
+  this.drive!.mirror(this.cache as any, opts) // Drive interface mismatch
+  ;(session.drive as any).getPeerKeys() // method exists in impl, not in types
+  ```
+- Use `import type` for circular dependencies between server modules:
+  ```ts
+  // session.ts
+  import type GhostDriveApp from './app.js' // type-only, breaks circular dep
+  ```
+- Use `!` non-null assertions when TypeScript can't prove a field is set after `ready()`:
+  ```ts
+  this.app.db!.insert(...)  // db is non-null after _open()
+  this.drive!.register(...)  // drive is non-null after _open()
+  ```
+- Exclude generated/vendor JS from type checking in `tsconfig.json`:
+  ```json
+  { "exclude": ["spec"] }
+  ```
 
 ## `$lib/server` discipline
 
-Anything that imports `corestore`, `hyperswarm`, `hyperdb`, or anything else with a Node/Bare dependency MUST live under `src/lib/server/`. SvelteKit guarantees `$lib/server/*` cannot be imported from client code — a client import is a build-time error, not a runtime explosion.
+Anything that imports holepunch or `bare-*` MUST live under `src/lib/server/`. SvelteKit guarantees `$lib/server/*` cannot be imported from client code.
 
-Rule of thumb:
+Structure:
 
-- `$lib/server/gip.ts` — db singleton + `getDB()` getter
-- `$lib/server/events.ts` — EventHub
-- `$lib/server/types.ts` — types that reference server modules
-- `$lib/types.ts` — pure shapes that the client also consumes
+- `$lib/server/app.ts` — main app class extending `ReadyResource`
+- `$lib/server/session.ts` — per-session logic
+- `$lib/server/loaders.ts` — all typed async helpers for load functions
+- `$lib/server/ambient.d.ts` — type declarations for untyped packages
 
-Never put a `b4a`, `compact-encoding`, or `corestore` import in `src/lib/`. The Vite bundler will try to ship it to the browser.
+## Svelte 5 runes in templates — async patterns
 
-## Singletons on `globalThis`
+Prefer `{#await}` directly in templates. Only use `$effect` + local state when you need stale-while-revalidate (show old data while new data loads).
 
-SvelteKit's dev server hot-reloads modules. A naive `let db = null; export async function getDB() { ... }` re-runs on every reload and you end up with N corestores fighting for the same data dir. Pin to `globalThis`:
+```svelte
+<!-- Clean: inline await, no side effects -->
+{#await data.drive then drive}
+  <h1>{drive.name}</h1>
+{/await}
 
-```ts
-// src/lib/server/gip.ts
-const g = globalThis as unknown as { __gipDB?: Promise<GipDB> };
+<!-- Stale-while-revalidate: show cached while streaming -->
+<script lang="ts">
+  let { data }: PageProps = $props();
+  let cachedEntries = $state<DriveEntry[] | null>(null);
+  $effect(() => {
+    data.entries.then((e) => (cachedEntries = e));
+  });
+</script>
 
-export function getDB(): Promise<GipDB> {
-  if (g.__gipDB) return g.__gipDB;
-  g.__gipDB = (async () => {
-    const store = new Corestore('./data/gear')
-    const swarm = new Hyperswarm({ /* ... */ })
-    // ...
-    return new GipDB(store, swarm /* ... */)
-  })();
-  return g.__gipDB;
-}
+{#await data.entries}
+  {#if cachedEntries}
+    <FileGrid entries={cachedEntries} />
+  {:else}
+    <!-- skeleton -->
+  {/if}
+{:then entries}
+  <FileGrid {entries} />
+{/await}
 ```
 
-Same pattern for `events` (the EventHub) and any other long-lived resource.
+**Pitfall: self-reference in `$state`**
+
+```svelte
+<!-- WRONG — crashes: "Cannot access 'repos' before initialization" -->
+let repos = $state(data.repos.map((r) => ({ ...r })));
+
+<!-- RIGHT — read from data, sync via $effect -->
+let repos: typeof data.repos = $state([]);
+$effect(() => { repos = data.repos.map((r) => ({ ...r })); });
+```
+
+## Adapter: `sveltekit-adapter-bare`
+
+### Setup in `svelte.config.js`
+
+See [Project scaffolding → svelte.config.js](#project-scaffolding) for the full required config. The short version — `csrf` and scoped `runes` are both required:
+
+```js
+import adapter from 'sveltekit-adapter-bare'
+
+const config = {
+  compilerOptions: {
+    runes: ({ filename }) =>
+      filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
+  },
+  kit: {
+    adapter: adapter({ window: { width: 1200, height: 800 } }),
+    csrf: { checkOrigin: false },
+  },
+}
+
+export default config
+```
+
+### Vite plugin for auto-externalizing `bare-*` packages
+
+```ts
+// vite.config.ts
+import { vitePlugin as bareExternals } from 'sveltekit-adapter-bare';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [tailwindcss(), sveltekit(), bareExternals()],
+  // vitePlugin auto-adds all bare-* packages to ssr.external
+  // Manual additions for non-bare holepunch packages still needed:
+  ssr: { external: ['distributed-drive', 'hyperdb', 'corestore', ...] }
+});
+```
+
+### Shutdown: Ctrl-C, window close, and `sveltekit:close`
+
+The adapter emits `sveltekit:close` on shutdown. Register teardown there:
+
+```ts
+process.on('sveltekit:close', async () => {
+  await app?.close()
+})
+```
+
+**Window close on macOS**: `AppKitWindow` emits `'will-close'` but the `NativeWindow` wrapper in `bare-native/darwin.js` does NOT forward it. Hook directly on `win._native`:
+
+```js
+// Inside adapter files/index.js after creating the window:
+win._native?.on?.('will-close', shutdown)
+```
+
+Without this, clicking the window X on macOS leaves the process running (the Bare event loop has no reason to exit).
+
+**The shutdown function pattern:**
+
+```js
+let shuttingDown = false
+
+async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  const handlers = process.listeners('sveltekit:close')
+  await Promise.all(handlers.map((fn) => Promise.resolve().then(fn)))
+  try {
+    server.close()
+  } catch {}
+  try {
+    win?._native?.close()
+  } catch {} // exits AppKit event loop
+  process.exit(0)
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
+```
+
+### Set-Cookie header fix
+
+The Bare HTTP handler must use `getSetCookie()` to avoid flattening multiple `Set-Cookie` headers:
+
+```js
+const headers = {}
+for (const [key, value] of response.headers) {
+  if (key.toLowerCase() === 'set-cookie') continue
+  headers[key] = value
+}
+if (typeof response.headers.getSetCookie === 'function') {
+  const cookies = response.headers.getSetCookie()
+  if (cookies.length === 1) headers['set-cookie'] = cookies[0]
+  else if (cookies.length > 1) headers['set-cookie'] = cookies
+}
+res.writeHead(response.status, headers)
+```
 
 ## SSE: shared EventHub, not per-connection polling
 
-The naive shape — every SSE connection opens its own `setInterval` to read swarm state — N×M-poll-explodes the moment you have a few clients × a few repos. The right shape:
-
-- **One** EventEmitter (the hub) wires to swarm/core events ONCE.
-- Each SSE connection just subscribes to hub events.
-- Per-resource attach is **lazy** — don't wire 100 cores until something cares.
-
-### The hub
+One EventEmitter wired to swarm events once; each SSE connection subscribes to hub events.
 
 ```ts
 // src/lib/server/events.ts
-import { EventEmitter } from 'node:events';
-
+import { EventEmitter } from 'node:events'
 class EventHub extends EventEmitter {
-  private peerKeys = new Set<string>();
-  private attachedCores = new WeakSet<object>();
-  private repoState = new Map<string, RepoStats>();
-  private db: GipDB | null = null;
-
   constructor() {
-    super();
-    // Each SSE client adds listeners — default cap of 10 trips
-    // MaxListenersExceededWarning instantly. Unbounded is fine here:
-    // listeners are bounded by client count, not data.
-    this.setMaxListeners(0);
-  }
-
-  attach(db: GipDB) {
-    if (this.db) return; // idempotent
-    this.db = db;
-    const swarm = (db as any).swarm;
-    swarm.on('connection', (conn) => {
-      const key = b4a.toString(conn.remotePublicKey, 'hex');
-      this.peerKeys.add(key);
-      this.emit('stats');
-      conn.on('close', () => {
-        this.peerKeys.delete(key);
-        this.emit('stats');
-      });
-    });
-  }
-
-  async ensureRepoAttached(db: GipDB, name: string) {
-    if (this.repoState.has(name)) return;
-    const entry = await db.getCore(name, { server: false, client: false });
-    if (!entry) return;
-    const core = entry.core;
-    this.repoState.set(name, { length: core.length, peers: core.peers.length });
-
-    if (this.attachedCores.has(core)) return;
-    this.attachedCores.add(core);
-
-    const recompute = () => {
-      this.repoState.set(name, { length: core.length, peers: core.peers.length });
-      this.emit(`repo:${name}`);
-      this.emit('repo', { name, ...this.repoState.get(name)! });
-    };
-
-    let lastLength = core.length;
-    core.on('append', () => {
-      const from = lastLength;
-      lastLength = core.length;
-      this.emit(`append:${name}`, { from, to: lastLength, added: lastLength - from });
-      recompute();
-    });
-    core.on('peer-add', recompute);
-    core.on('peer-remove', recompute);
+    super()
+    this.setMaxListeners(0)
+  } // unbounded: one per SSE client
+  attach(app: GhostDriveApp) {
+    /* wire swarm events once */
   }
 }
-
-const g = globalThis as unknown as { __eventHub?: EventHub };
-export const events: EventHub = g.__eventHub ?? (g.__eventHub = new EventHub());
+const g = globalThis as { __eventHub?: EventHub }
+export const events: EventHub = g.__eventHub ?? (g.__eventHub = new EventHub())
 ```
-
-### The SSE endpoint
 
 ```ts
 // src/routes/api/events/+server.ts
-import type { RequestHandler } from './$types';
-import { events } from '$lib/server/events';
-
-export const GET: RequestHandler = async ({ locals }) => {
-  await events.attachAll(locals.db); // lazy-wire every repo
-
-  const encoder = new TextEncoder();
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
-  let onStats: (() => void) | null = null;
-  let onRepo: ((p: any) => void) | null = null;
-
+export const GET: RequestHandler = async () => {
+  let onStats: (() => void) | null = null
   const stream = new ReadableStream({
     start(controller) {
-      let closed = false;
-      const send = (event: string, data: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        } catch {
-          closed = true;
-        }
-      };
-
-      send('stats', events.getStats()); // immediate snapshot
-
-      onStats = () => send('stats', events.getStats());
-      events.on('stats', onStats);
-
-      onRepo = (payload) => send('repo', payload);
-      events.on('repo', onRepo);
-
-      // Keep proxies/load-balancers from killing the idle connection.
-      heartbeat = setInterval(() => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`: ping\n\n`));
-        } catch {
-          closed = true;
-        }
-      }, 30_000);
+      const send = (event: string, data: unknown) =>
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+      onStats = () => send('stats', events.getStats())
+      events.on('stats', onStats)
+      send('stats', events.getStats()) // immediate snapshot
     },
     cancel() {
-      if (onStats) events.off('stats', onStats);
-      if (onRepo) events.off('repo', onRepo);
-      if (heartbeat) clearInterval(heartbeat);
+      if (onStats) events.off('stats', onStats) // MUST clean up or leak
     }
-  });
-
+  })
   return new Response(stream, {
     headers: {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
       'x-accel-buffering': 'no'
     }
-  });
-};
-```
-
-Critical bits:
-
-- **`cancel()` MUST clean up listeners.** Otherwise the hub accumulates dead listeners on every reconnect. Track the listener references in outer-scope `let`s so `cancel()` can find them.
-- **Heartbeat every ~30s.** SvelteKit's adapter, nginx, Cloudflare, etc. all kill idle TCP connections at varying intervals.
-- **Send an immediate snapshot in `start`** so the UI doesn't render stale SSR data while waiting for the first real event.
-- **`x-accel-buffering: no`** disables proxy buffering that would otherwise hold the stream until it fills a buffer.
-- **One global stream over many.** Browsers cap HTTP/1.1 connections to ~6 per host. A single `/api/events` carrying generic `repo` events for all repos beats one connection per row.
-
-### The client
-
-```svelte
-<!-- src/routes/+page.svelte -->
-<script lang="ts">
-  import { onMount } from 'svelte';
-  import type { PageProps } from './$types';
-
-  let { data }: PageProps = $props();
-
-  // PITFALL: don't write `let repos = $state(repos.map(...))` — it
-  // self-references and crashes SSR with "Cannot access 'repos' before
-  // initialization". Read from `data.repos`, then re-sync via $effect.
-  let repos: typeof data.repos = $state(data.repos.map((r) => ({ ...r })));
-  $effect(() => {
-    repos = data.repos.map((r) => ({ ...r }));
-  });
-
-  onMount(() => {
-    const es = new EventSource('/api/events');
-    es.addEventListener('repo', (e) => {
-      const payload = JSON.parse((e as MessageEvent).data);
-      const idx = repos.findIndex((r) => r.name === payload.name);
-      if (idx === -1) return;
-      repos[idx] = { ...repos[idx], length: payload.length, peers: payload.peers };
-    });
-    return () => es.close();
-  });
-</script>
+  })
+}
 ```
 
 ## Form actions: `use:enhance` + optimistic UI
-
-For toggles and small mutations, run the action through `use:enhance` and optimistically flip local state. Use a hidden form + `requestSubmit()` for switches that don't have a visible submit button:
 
 ```svelte
 <script lang="ts">
   import { enhance } from '$app/forms';
   import { tick } from 'svelte';
+  let { data }: PageProps = $props();
+  let enabled = $state(data.enabled);
+  let form: HTMLFormElement;
 
-  let { data, form }: PageProps = $props();
-  let seedReadOnly = $state(data.seedReadOnly);
-  let seedForm: HTMLFormElement;
-
-  async function toggleSeedReadOnly() {
-    seedReadOnly = !seedReadOnly; // optimistic
-    await tick();                 // let the hidden input observe the new value
-    seedForm.requestSubmit();     // fire form action
+  async function toggle() {
+    enabled = !enabled;
+    await tick(); // let hidden input observe new value
+    form.requestSubmit();
   }
 </script>
 
-<form
-  bind:this={seedForm}
-  method="POST"
-  action="?/setSeedReadOnly"
-  use:enhance={() => async ({ update }) => { await update({ reset: false }); }}
->
-  <input type="hidden" name="value" value={seedReadOnly} />
+<form bind:this={form} method="POST" action="?/setEnabled"
+  use:enhance={() => async ({ update }) => { await update({ reset: false }); }}>
+  <input type="hidden" name="value" value={enabled} />
 </form>
-
-<button onclick={toggleSeedReadOnly}>
-  Seeding read-only mirrors: {seedReadOnly ? 'on' : 'off'}
-</button>
-```
-
-Server side:
-
-```ts
-// src/routes/settings/+page.server.ts
-export const actions = {
-  setSeedReadOnly: async ({ request, locals }) => {
-    const data = await request.formData();
-    const value = data.get('value') === 'true';
-    await locals.db.setSeedReadOnly(value);
-    return { ok: true };
-  }
-} satisfies Actions;
-
-export const load = async ({ locals }) => ({
-  seedReadOnly: await locals.db.getSeedReadOnly()
-});
-```
-
-## Blind peers don't show up on the swarm
-
-`blind-peering` connects to its mirror peers via `dht.connect(remotePublicKey)` directly — it bypasses `Hyperswarm` entirely. That means `swarm.on('connection')` never fires for blind peers, and any peer count derived only from swarm state will under-report.
-
-If your UI shows a "peer connections" number, it must include blind peers. The `BlindPeering` instance exposes `blindPeers: Map<string, BlindPeer>` where each entry has a `.connected: boolean`. The `BlindPeer` class doesn't emit lifecycle events, so to keep a live count the hub needs to poll on a low cadence (one timer per process, fanned out via `'stats'` only when the count actually changed):
-
-```ts
-// in EventHub.attach(db)
-this.blind = (db as any).blind ?? null;
-if (this.blind) {
-  this.recountBlindPeers();
-  this.blindPoll = setInterval(() => {
-    if (this.recountBlindPeers()) this.emit('stats');
-  }, 2000);
-}
-
-private recountBlindPeers(): boolean {
-  let n = 0;
-  for (const bp of this.blind.blindPeers.values()) if (bp.connected) n++;
-  if (n === this.blindPeerCount) return false;
-  this.blindPeerCount = n;
-  return true;
-}
-
-getStats() {
-  return {
-    peers: this.peerKeys.size + this.blindPeerCount,
-    swarmPeers: this.peerKeys.size,
-    blindPeers: this.blindPeerCount,
-    dhtNodes: this.swarm?.dht?.nodes?.length ?? 0
-  };
-}
-```
-
-Also recount on swarm connection open/close — when the local network comes up, blind peers usually reconnect around the same time, and recounting opportunistically beats waiting for the next poll tick.
-
-Expose `get blind()` on the db class so the hub doesn't have to reach into private fields:
-
-```js
-// in GipLocalDB
-get blind() { return this._blind }
+<button onclick={toggle}>Toggle</button>
 ```
 
 ## Hyperswarm gotcha: `join` vs `refresh`
 
-This one bit Gear hard. Calling `swarm.join(topic, opts)` a second time does NOT mutate the existing discovery — it adds a SECOND `PeerDiscoverySession` for the same topic. Your old `{ server: true }` session keeps announcing while the new `{ server: false }` session quietly does nothing useful. To toggle announce/lookup on a topic you've already joined:
+`swarm.join(topic, opts)` called twice adds a SECOND session — it does NOT update the first.
 
 ```js
 // WRONG — adds a session, leaves old one alive
 swarm.join(topic, { server: false, client: true })
 
-// RIGHT — mutates the existing session in place
+// RIGHT — mutates the existing session
 discovery.refresh({ server: false, client: true })
-if (announceNow) await discovery.flushed()
+await discovery.flushed()
 ```
 
-Track the `discovery` handle returned by the original `join()` call. Use `discovery.isServer` (not `_server`) to read state.
+Track the `discovery` handle returned by the original `join()`.
 
-## HyperDB / Hyperbee gotchas
+## HyperDB gotchas
 
-- **Compact-encoded structs cannot be expanded after the fact.** If a schema field needs to change, you need a migration path — don't just edit `schema/hyperdb/index.js`.
-- **Empty blobs round-trip as `null`.** Always `obj.data || Buffer.alloc(0)` when reading blob bytes you intend to write to disk.
 - **`db.find()` returns an async iterator.** Always `for await`, never assume sync.
-- **Branch records that hold a denormalized "everything reachable" set must MERGE on update**, not overwrite. A thin pack push only contains new objects — overwriting drops history. (This was the "I cloned and lost a commit" bug in `gip-remote`.)
-
-## File-deletion sync on commits
-
-If you index files keyed by `(branch, path)`, a commit that removes a file leaves a ghost row unless you reconcile. Diff the new tree against existing rows BEFORE inserting:
-
-```js
-const newPaths = new Set(files.map((f) => f.path))
-const existing = db.find('@gip/files', { branch: refName })
-for await (const file of existing) {
-  if (!newPaths.has(file.path)) {
-    await db.delete('@gip/files', { branch: refName, path: file.path })
-  }
-}
-// then insert/upsert the current tree
-```
+- **Compact-encoded schemas cannot be expanded after the fact.** Think about field additions before writing your schema.
+- **Empty blobs round-trip as `null`.** Use `obj.data || Buffer.alloc(0)` when reading blob fields.
 
 ## Bare runtime specifics
 
-- **`Buffer` is NOT a global.** Use `b4a` (`require('b4a')`) for cross-runtime byte ops, or import `Buffer` explicitly.
-- **`process.versions.bare`** distinguishes Bare from Node — useful when a shared module needs to branch.
-- **No `setImmediate` semantics guaranteed.** Stick to `queueMicrotask` / `Promise.resolve().then(...)` for next-tick work.
-- **Holepunch packages aren't typed.** Cast through `unknown` at the boundary, then expose typed wrappers from `$lib/server/`. Don't sprinkle `any`.
+- **`Buffer` is NOT a global in all contexts.** Use `b4a` for cross-runtime byte ops.
+- **`process.versions.bare`** distinguishes Bare from Node.
+- **`bare-storage`** for persistent/ephemeral paths: `storage.persistent()` returns a writable path that survives app restarts.
+- **No `setImmediate` semantics guaranteed.** Use `queueMicrotask` / `Promise.resolve().then(...)`.
 
-## Common pitfalls (compounded list)
+## Common pitfalls
 
-- **`let x = $state(x.map(...))` crashes SSR.** Read from `data.x` (or rename the input). The error reads "Cannot access 'x' before initialization" and is hard to spot in a diff if you got here via `replace_all`.
-- **`replace_all` across `+page.svelte` is dangerous.** It happily corrupts variable declarations into self-references. Prefer scoped `Edit` calls.
-- **Forgetting to clean SSE listeners in `cancel()`** leaks an EventEmitter listener per reconnect. Within minutes the hub is firing into thousands of dead handlers.
-- **Forgetting `setMaxListeners(0)` on the hub** floods stderr with `MaxListenersExceededWarning` once a handful of clients connect.
-- **Polling on every SSE connection** means a 100-repo / 50-tab fleet does 5000 redundant reads per tick. Use the hub.
-- **Calling `swarm.join` to "update" announce state** silently doubles up sessions. Use `discovery.refresh`.
-- **Putting a corestore-importing file in `src/lib/`** — it'll silently work in dev (SSR) and explode at build time (or in the browser bundle). Move to `$lib/server/`.
-- **Restarting the server during dev without `globalThis` singletons** leaks corestore handles to the data dir. Pin singletons.
+- **Missing bare-\* runtime deps** — `bare-crypto`, `bare-fetch`, `bare-http1`, `bare-module`, `bare-native`, `bare-process` must all be in `dependencies`. Omitting any causes a silent build failure or startup crash.
+- **`csrf: { checkOrigin: false }` missing from `svelte.config.js`** — form actions silently fail inside Bare because the request origin never matches the server. Required, not optional.
+- **`runes: true` globally in `compilerOptions`** — breaks any Holepunch dep that isn't in runes mode. Use the scoped form: `runes: ({ filename }) => filename.split(/[/\\]/).includes('node_modules') ? undefined : true`.
+- **`manifest.xml` missing for Android builds** — `make:android` fails immediately. Create the file in the project root (see scaffolding section for the template).
+- **`--icon` flag without a real PNG** — `make:darwin` requires a PNG in the project root. Do not auto-generate a placeholder; ask the user to provide it.
+- **`throw redirect()` in any server file** — breaks Android navigation. Return `{ redirect: '/path' }` and call `goto()` in the enhance callback instead.
+- **Blocking in layout.server.ts** — `await locals.app.ready()` before returning causes a white screen. Stream instead.
+- **`.then()` chains** — use named async functions or `{#await}`. `.then()` is hard to read and can't use `await` inside.
+- **`Promise.resolve(x)` antipattern** — just use `x` directly or `{#await data.x}` in the template.
+- **`(async () => {...})()`** — IIFEs for side effects (e.g. `goto()`) are not clean. Use server-side redirects or named handlers.
+- **`$state` self-reference** — `let x = $state(x.map(...))` crashes SSR. Read from `data.x`.
+- **Forgetting `cancel()` cleanup in SSE** — leaks a listener per reconnect. Track refs in outer `let`s.
+- **Forgetting `setMaxListeners(0)` on EventHub** — floods stderr once a few SSE clients connect.
+- **`swarm.join` to update announce state** — silently doubles up sessions. Use `discovery.refresh`.
+- **Importing holepunch in `src/lib/`** (not `src/lib/server/`) — works in dev SSR, explodes in browser bundle.
+- **Window close not killing the process on macOS** — hook `win._native?.on?.('will-close', shutdown)` directly.
+- **Ambient declarations ignored for packages with shipped types** — if a package has `index.d.ts`, your `declare module 'pkg'` in ambient.d.ts is a no-op for that package. Cast with `as any` at call sites instead.
 
-## Testing notes (`brittle` + `hyperdht/testnet`)
+## Quick checklist for a new feature
 
-The reference test pattern for any P2P feature in this stack:
-
-```js
-const test = require('brittle')
-const createTestnet = require('hyperdht/testnet')
-
-test('feature', async (t) => {
-  const { bootstrap } = await createTestnet(3, t.teardown)
-  const r1 = await createRemote(t, { name: 'r1', bootstrap })
-  // ... push, fetch, replicate
-  const r2 = await createRemote(t, { link: r1.url, bootstrap })
-  t.is(r1.core.length, r2.core.length)
-})
-```
-
-Always pass `t.teardown` to the testnet — otherwise the DHT keeps running and the next test inherits its peers.
-
-## Quick checklist when scaffolding a new feature
-
-1. Does it touch the P2P stack? → goes in `$lib/server/`.
-2. Does it need to push live updates to the UI? → emit on the hub, subscribe in the SSE endpoint, listen in `onMount`.
-3. Does it mutate persistent state? → form action + `use:enhance`, optimistic local state if it's a toggle.
-4. Does it open a new long-lived resource? → singleton-on-`globalThis`, attach lazily.
-5. Does it add a new swarm topic or change announce state? → keep the `discovery` handle and use `refresh()`.
-6. Does it add a new schema field? → think about back-compat first; compact-encoded structs don't expand cleanly.
+1. Async data? → Named `async function` in `loaders.ts`, return its promise from load, `{#await}` in template.
+2. UI update needed? → Emit on EventHub, subscribe in SSE endpoint, listen in `onMount`.
+3. Mutation? → Form action + `use:enhance`, optimistic local state for toggles.
+4. New long-lived resource? → `ReadyResource` subclass, opened in `_open()`, closed in `_close()`.
+5. New swarm topic? → Keep the `discovery` handle, use `discovery.refresh()` to mutate.
+6. Untyped package? → `ambient.d.ts` module declaration; if package ships own types, cast with `as any` at boundary.
