@@ -24,9 +24,9 @@ export function vitePlugin() {
       } catch {
         return
       }
-      const all_deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })
-      const bare_pkgs = all_deps.filter((d) => d.startsWith('bare-'))
-      const entries = bare_pkgs.flatMap((d) => [d, `${d}/*`])
+      // Externalize all runtime dependencies so Vite's Node SSR process doesn't
+      // try to bundle packages that use bare APIs or native addons.
+      const entries = Object.keys(pkg.dependencies ?? {}).flatMap((d) => [d, `${d}/*`])
       cfg.ssr = cfg.ssr ?? {}
       const existing = Array.isArray(cfg.ssr.external) ? cfg.ssr.external : []
       cfg.ssr.external = [...new Set([...existing, ...entries])]
@@ -68,8 +68,6 @@ export default function (opts = {}) {
         ].join('\n\n')
       )
 
-      const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
-
       // Redirect node: builtins to bare equivalents so the server bundle
       // resolves correctly in a bare runtime.
       /** @type {Record<string, string>} */
@@ -101,7 +99,12 @@ export default function (opts = {}) {
         'node:async_hooks': async_hooks_stub
       }
 
-      // All runtime deps stay external — bare resolves them at runtime.
+      const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+
+      // Keep all runtime deps external so bare-build resolves them at runtime
+      // via bare-module-resolve, preserving the full transitive resolution chain.
+      // Bundling a dep that transitively reaches a native addon causes bare-pack
+      // to see require('.') inside a chunk — which it cannot satisfy.
       const external = Object.keys(pkg.dependencies ?? {}).flatMap((d) => [d, `${d}/*`])
 
       await build({
