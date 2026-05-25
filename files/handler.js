@@ -214,7 +214,10 @@ function inject_ws_cookie() {
 
     // Wrap writeHead to append Set-Cookie on the way out.
     const orig = res.writeHead.bind(res)
-    res.writeHead = (/** @type {number} */ status, /** @type {Record<string, any>} */ headers = {}) => {
+    res.writeHead = (
+      /** @type {number} */ status,
+      /** @type {Record<string, any>} */ headers = {}
+    ) => {
       const bwt = `_bwt=${token}; HttpOnly; SameSite=Strict; Path=/`
       const sc = headers['set-cookie']
       headers['set-cookie'] = sc ? (Array.isArray(sc) ? [...sc, bwt] : [sc, bwt]) : bwt

@@ -42,12 +42,12 @@ export default config
 
 Options:
 
-| option | default | description |
-| --- | --- | --- |
-| `out` | `'build'` | Directory to emit the server bundle. |
-| `window.width` | `800` | Native window width in pixels. |
-| `window.height` | `600` | Native window height in pixels. |
-| `window.inspectable` | `false` | Enable the WebView's remote DevTools inspector. |
+| option               | default   | description                                     |
+| -------------------- | --------- | ----------------------------------------------- |
+| `out`                | `'build'` | Directory to emit the server bundle.            |
+| `window.width`       | `800`     | Native window width in pixels.                  |
+| `window.height`      | `600`     | Native window height in pixels.                 |
+| `window.inspectable` | `false`   | Enable the WebView's remote DevTools inspector. |
 
 ## Vite plugin
 

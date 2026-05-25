@@ -94,13 +94,12 @@ import adapter from 'sveltekit-adapter-bare'
 
 const config = {
   compilerOptions: {
-    runes: ({ filename }) =>
-      filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
+    runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
   },
   kit: {
     adapter: adapter({ window: { width: 1200, height: 800 } }),
-    csrf: { checkOrigin: false },
-  },
+    csrf: { checkOrigin: false }
+  }
 }
 
 export default config
@@ -291,8 +290,8 @@ async function findLastSession(app: GhostDriveApp | null): Promise<string | null
 // +page.server.ts
 export const actions: Actions = {
   create: async ({ locals, request }) => {
-    const session = await locals.app.createSession({ name });
-    return { redirect: `/drive/${session.id}` }; // NOT throw redirect
+    const session = await locals.app.createSession({ name })
+    return { redirect: `/drive/${session.id}` } // NOT throw redirect
   }
 }
 ```
@@ -311,7 +310,7 @@ export const actions: Actions = {
 
 ```ts
 // server — no redirect needed
-return {};
+return {}
 ```
 
 ```svelte
@@ -324,8 +323,8 @@ return {};
 ```ts
 // server
 deleteSession: async ({ locals, params }) => {
-  await locals.app.removeSession(params.id);
-  return {};
+  await locals.app.removeSession(params.id)
+  return {}
 }
 ```
 
@@ -444,7 +443,7 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
     path: dirPath,
     drive: loadDrive(locals.app, params.id), // Promise, streamed
     entries, // Promise — instant if cached
-    fresh    // Promise | null — streams fresh data after stale render
+    fresh // Promise | null — streams fresh data after stale render
   }
 }
 ```
@@ -600,13 +599,12 @@ import adapter from 'sveltekit-adapter-bare'
 
 const config = {
   compilerOptions: {
-    runes: ({ filename }) =>
-      filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
+    runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
   },
   kit: {
     adapter: adapter({ window: { width: 1200, height: 800 } }),
-    csrf: { checkOrigin: false },
-  },
+    csrf: { checkOrigin: false }
+  }
 }
 
 export default config
