@@ -203,6 +203,27 @@ const ssr = async (/** @type {any} */ req, /** @type {any} */ res) => {
   res.end()
 }
 
+function inject_ws_cookie() {
+  return (/** @type {any} */ req, /** @type {any} */ res, /** @type {() => void} */ next) => {
+    const token = globalThis.__BARE_WS_TOKEN
+    if (!token) return next() // dev — token not set by build entry
+
+    // Cookie already present and valid — nothing to do.
+    const cookie_header = req.headers['cookie'] ?? ''
+    if (cookie_header.split(';').some((c) => c.trim() === `_bwt=${token}`)) return next()
+
+    // Wrap writeHead to append Set-Cookie on the way out.
+    const orig = res.writeHead.bind(res)
+    res.writeHead = (/** @type {number} */ status, /** @type {Record<string, any>} */ headers = {}) => {
+      const bwt = `_bwt=${token}; HttpOnly; SameSite=Strict; Path=/`
+      const sc = headers['set-cookie']
+      headers['set-cookie'] = sc ? (Array.isArray(sc) ? [...sc, bwt] : [sc, bwt]) : bwt
+      return orig(status, headers)
+    }
+    next()
+  }
+}
+
 /** @param {Array<(req: any, res: any, next: () => void) => void>} handlers */
 function sequence(handlers) {
   return (/** @type {any} */ req, /** @type {any} */ res, /** @type {() => void} */ next) => {
@@ -216,6 +237,7 @@ function sequence(handlers) {
 }
 
 export const handler = sequence([
+  inject_ws_cookie(),
   serve_assets(client_assets, { immutable: true }),
   serve_prerendered(),
   ssr

@@ -4,8 +4,14 @@ import { webcrypto } from 'bare-crypto'
 import { Window, WebView } from 'bare-native'
 import { command, flag } from 'paparam'
 import { handler } from 'HANDLER'
+import BackHandler from '#navigation'
 
 globalThis.crypto = webcrypto
+
+// Per-boot secret used to gate WebSocket upgrades. handler.js sets it as a
+// HttpOnly cookie on the first response; the WebView sends it automatically
+// on every subsequent request, including WS upgrades.
+globalThis.__BARE_WS_TOKEN = webcrypto.randomUUID()
 
 const cmd = command(
   'app',
@@ -30,6 +36,24 @@ const server = http.createServer((req, res) => {
     res.end('Not Found')
   })
 })
+
+server.on('upgrade', (req, socket) => {
+  if (parse_cookies(req.headers['cookie'] ?? '')['_bwt'] !== globalThis.__BARE_WS_TOKEN) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+  }
+})
+
+/** @param {string} header @returns {Record<string, string>} */
+function parse_cookies(header) {
+  const out = {}
+  for (const part of header.split(';')) {
+    const i = part.indexOf('=')
+    if (i < 0) continue
+    out[part.slice(0, i).trim()] = part.slice(i + 1).trim()
+  }
+  return out
+}
 
 let win = null
 let shuttingDown = false
@@ -72,6 +96,12 @@ server.listen(requested_port, host, () => {
   // AppKitWindow (macOS) emits 'will-close' when the user clicks the red X.
   // Without this the process keeps running after the window is gone.
   win._native?.on?.('will-close', shutdown)
+
+  BackHandler.on('back', () => {
+    webView.loadURL(
+      'javascript:(function(){var e=new CustomEvent("bare:back",{cancelable:true,bubbles:true});window.dispatchEvent(e);if(!e.defaultPrevented)history.back()})()'
+    )
+  })
 })
 
 export { server }

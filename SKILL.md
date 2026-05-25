@@ -118,13 +118,14 @@ Required by `make:android`. Place it in the project root. Minimum viable manifes
     android:versionName="1.0"
     package="com.yourorg.yourapp"
 >
-  <uses-sdk android:minSdkVersion="31" android:targetSdkVersion="36" />
+  <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="36" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
   <application
         android:label="YourApp"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true"
     >
     <activity
             android:name="to.holepunch.bare.Activity"
@@ -152,15 +153,16 @@ import { building } from '$app/environment'
 import GhostDriveApp from '$lib/server/app.js'
 import storage from 'bare-storage'
 import path from 'path'
+import process from 'process' // required: Bare does not inject process as a global
 
-let app: GhostDriveApp | null = null
+let app: any = null // 'any' avoids circular-type issues; type via app.d.ts
 
 if (!building && !app) {
   const dir = path.join(storage.persistent(), 'ghost-drive')
   app = new GhostDriveApp({ dir })
   app
     .ready()
-    .then(() => console.log('ready, key:', app!.key!.toString('hex')))
+    .then(() => console.log('ready, key:', app.key.toString('hex')))
     .catch((err: Error) => console.error('boot failed:', err))
 
   process.on('sveltekit:close', async () => {
@@ -200,32 +202,50 @@ export {}
 
 ```ts
 // src/routes/+layout.server.ts
-import type { LayoutServerLoad } from './$types'
+import type { LayoutServerLoad } from '$types'
 import { loadSessions } from '$lib/server/loaders'
 
-export const load: LayoutServerLoad = ({ locals, depends }) => {
-  depends('app:layout')
-  return { sessions: loadSessions(locals.app) } // Promise, not awaited
+// Sessions are needed for the sidebar (SSR shell), so await is correct here.
+// app.listSessions() is O(1) after app.ready(), so no meaningful delay.
+export const load: LayoutServerLoad = async ({ locals, depends }) => {
+  depends('app:layout') // lets callers invalidate('app:layout') to re-run this
+  return { sessions: await loadSessions(locals.app) }
 }
 ```
 
 ```svelte
-<!-- +layout.svelte -->
-{#await data.sessions}
-  <Sidebar sessions={[]} />
-{:then sessions}
-  <Sidebar {sessions} />
-{:catch}
-  <Sidebar sessions={[]} />
-{/await}
+<!-- +layout.svelte — sessions already resolved, no {#await} needed -->
+<Sidebar sessions={data.sessions} />
 ```
+
+**When to await vs stream:**
+
+- **Await** in layout/page loads when the data is needed to render the HTML shell (sidebar list, page title, route guards). After `app.ready()` these reads are local and fast.
+- **Stream** (return a Promise) for data that requires P2P network access or heavy I/O — drive entries, peer lists, file previews. Use `{#await}` in the template.
 
 **Rules:**
 
-- Never `await` in the return of a load function unless the data is needed for SSR rendering of the shell
-- Never use `.then()` chains — use named `async` functions or `{#await}` instead
-- Never use `Promise.resolve(x)` as a workaround — just use `x` or `{#await}` directly
+- Never `await` a long P2P operation before returning from a load function — stream it
+- Never use `.then()` chains in templates — use `{#await}` or named async functions
 - **Never use `throw redirect()` anywhere** — server-side redirects break Android. Always navigate with client-side `goto()`
+
+### Targeted invalidation: `depends()` + `goto({ invalidate })`
+
+Use `depends('app:layout')` in the layout load, then pass `invalidate` to `goto()` to refresh only that load when navigating. This is cleaner than calling `invalidate()` then `goto()` separately.
+
+```ts
+// +layout.server.ts — declare the dependency
+depends('app:layout')
+```
+
+```svelte
+<!-- settings/+page.svelte — after deleting a session -->
+<form use:enhance={() => async () => {
+  goto('/', { invalidate: ['app:layout'] })
+}}>
+```
+
+`goto()` alone does NOT re-run the layout load when the URL root hasn't changed. Always pass `invalidate` (or call `invalidate('app:layout')` before `goto()`) when mutations should update the sidebar or other layout data.
 
 ## No server-side redirects — always use `goto()`
 
@@ -299,7 +319,7 @@ return {};
 <form method="POST" action="?/addDrive" use:enhance>
 ```
 
-**Form actions that navigate away**: return `{}` from server, call `goto()` directly in enhance without calling `update()`.
+**Form actions that navigate away and need to refresh layout data**: return `{}` from server, use `goto()` with the `invalidate` option. This is cleaner than calling `invalidate()` then `goto()` separately.
 
 ```ts
 // server
@@ -311,8 +331,12 @@ deleteSession: async ({ locals, params }) => {
 
 ```svelte
 <form method="POST" action="?/deleteSession"
-  use:enhance={() => async () => { goto('/'); }}>
+  use:enhance={() => async () => {
+    goto('/', { invalidate: ['app:layout'] })
+  }}>
 ```
+
+`goto()` alone does NOT re-run the layout load when the root URL segment hasn't changed. The `invalidate` option triggers the declared `depends('app:layout')` dependency before navigation completes.
 
 ## Loaders pattern: `$lib/server/loaders.ts`
 
@@ -324,65 +348,103 @@ import { error } from '@sveltejs/kit'
 import type GhostDriveApp from './app.js'
 import type DriveSession from './session.js'
 
-export interface DriveInfo {
-  id: string
-  name: string
-  peerCount: number
-  isGuest: boolean
-}
 export interface DriveEntry {
   name: string
   isFolder: boolean
   cached: boolean
-}
-export interface PeerInfo {
-  key: string
-  short: string
-  online: boolean
+  size: number | null
 }
 
-export async function getSession(app: GhostDriveApp, id: string): Promise<DriveSession> {
-  await app.ready()
-  const session = app.getSession(id)
-  if (!session) throw error(404, 'Drive not found')
-  return session
-}
-
-export async function loadDrive(app: GhostDriveApp, id: string): Promise<DriveInfo> {
+// --- Parallelizing inside an async iterator ---
+// Fire all per-item promises immediately without awaiting inside the loop.
+// For a 100-file directory, this collapses ~200 sequential P2P round-trips
+// into one parallel batch.
+async function fetchEntries(app: GhostDriveApp, id: string, dirPath: string): Promise<DriveEntry[]> {
   const session = await getSession(app, id)
-  app.updateSession(id).catch(() => {})
-  return {
-    id: session.id,
-    name: session.name,
-    peerCount: session.peerCount,
-    isGuest: session.isGuest
+  const seen = new Set<string>()
+  const pending: Promise<DriveEntry>[] = []
+
+  async function resolveEntry(name: string): Promise<DriveEntry> {
+    const fullPath = dirPath === '/' ? '/' + name : `${dirPath}/${name}`
+    // ... two parallel lookups per entry: entry() + cache.entry()
+    return { name, isFolder, cached, size }
   }
+
+  for await (const item of session.drive!.readdir(dirPath)) {
+    const name = typeof item === 'string' ? item : (item as any).key || (item as any).name
+    if (!name || name.startsWith('.') || seen.has(name)) continue
+    seen.add(name)
+    pending.push(resolveEntry(name)) // fire, don't await
+  }
+
+  const entries = await Promise.all(pending) // resolve all concurrently
+  return entries.sort(...)
+}
+```
+
+### Stale-while-revalidate (SWR) loader
+
+Return cached data immediately, then stream fresh data as a second `fresh` promise. The client renders instantly with stale data and updates cleanly when the background fetch completes.
+
+```ts
+// loaders.ts — SWR cache
+const REVALIDATE_AFTER = 15_000
+
+interface CacheEntry {
+  entries: DriveEntry[]
+  ts: number
+  pending?: Promise<DriveEntry[]> // dedup concurrent revalidations
 }
 
-export async function loadEntries(
+const entriesCache = new Map<string, CacheEntry>()
+
+export function loadEntries(
   app: GhostDriveApp,
   id: string,
   dirPath: string
-): Promise<DriveEntry[]> {
-  const session = await getSession(app, id)
-  const result: DriveEntry[] = []
-  for await (const item of session.drive!.readdir(dirPath)) {
-    // ...
+): { entries: Promise<DriveEntry[]>; fresh: Promise<DriveEntry[]> | null } {
+  const cacheKey = `${id}:${dirPath}`
+  const hit = entriesCache.get(cacheKey)
+
+  if (!hit) {
+    // First load — wait for real data
+    const p = fetchEntries(app, id, dirPath).then((entries) => {
+      entriesCache.set(cacheKey, { entries, ts: Date.now() })
+      return entries
+    })
+    return { entries: p, fresh: null }
   }
-  return result
+
+  if (Date.now() - hit.ts < REVALIDATE_AFTER) {
+    return { entries: Promise.resolve(hit.entries), fresh: null }
+  }
+
+  // Stale — return cached immediately, revalidate in background
+  if (!hit.pending) {
+    hit.pending = fetchEntries(app, id, dirPath)
+      .then((entries) => {
+        entriesCache.set(cacheKey, { entries, ts: Date.now() })
+        return entries
+      })
+      .finally(() => {
+        const c = entriesCache.get(cacheKey)
+        if (c) delete c.pending
+      })
+  }
+  return { entries: Promise.resolve(hit.entries), fresh: hit.pending }
 }
 ```
 
 ```ts
-// src/routes/drive/[id]/+page.server.ts — thin coordinator
-import { loadDrive, loadEntries } from '$lib/server/loaders'
-
+// +page.server.ts — spread both values
 export const load: PageServerLoad = ({ locals, params, url }) => {
-  const dirPath = url.searchParams.get('path') || '/'
+  const dirPath = (url.searchParams.get('path') || '/').replaceAll('+', ' ')
+  const { entries, fresh } = loadEntries(locals.app, params.id, dirPath)
   return {
     path: dirPath,
     drive: loadDrive(locals.app, params.id), // Promise, streamed
-    entries: loadEntries(locals.app, params.id, dirPath) // Promise, streamed
+    entries, // Promise — instant if cached
+    fresh    // Promise | null — streams fresh data after stale render
   }
 }
 ```
@@ -474,7 +536,7 @@ Structure:
 
 ## Svelte 5 runes in templates — async patterns
 
-Prefer `{#await}` directly in templates. Only use `$effect` + local state when you need stale-while-revalidate (show old data while new data loads).
+Prefer `{#await}` directly in templates. Only use `$effect` + local state when you need stale-while-revalidate (show old data while new data loads, then update cleanly when fresh arrives).
 
 ```svelte
 <!-- Clean: inline await, no side effects -->
@@ -482,25 +544,39 @@ Prefer `{#await}` directly in templates. Only use `$effect` + local state when y
   <h1>{drive.name}</h1>
 {/await}
 
-<!-- Stale-while-revalidate: show cached while streaming -->
+<!-- Full SWR pattern:
+     data.entries  — resolves immediately from cache (stale ok)
+     data.fresh    — Promise<Entry[]> | null — streams fresh data when ready
+     cachedEntries — reactive $state so the grid updates when fresh arrives   -->
 <script lang="ts">
   let { data }: PageProps = $props();
   let cachedEntries = $state<DriveEntry[] | null>(null);
+
   $effect(() => {
-    data.entries.then((e) => (cachedEntries = e));
-  });
+    let cancelled = false
+    ;(async () => {
+      cachedEntries = await data.entries
+      if (data.fresh && !cancelled) {
+        cachedEntries = await data.fresh // swaps in cleanly when background fetch lands
+      }
+    })()
+    return () => { cancelled = true } // cancel stale update if user navigates away
+  })
 </script>
 
 {#await data.entries}
-  {#if cachedEntries}
-    <FileGrid entries={cachedEntries} />
+  {#if cachedEntries !== null}
+    <FileGrid entries={cachedEntries} /> <!-- previous dir while loading -->
   {:else}
-    <!-- skeleton -->
+    <!-- skeleton (true first load only) -->
   {/if}
 {:then entries}
-  <FileGrid {entries} />
+  <!-- Use cachedEntries (reactive) not entries (local let) so fresh update flows through -->
+  <FileGrid entries={cachedEntries ?? entries} />
 {/await}
 ```
+
+The `cancelled` flag prevents a resolved `data.fresh` from writing to `cachedEntries` after the user has already navigated away and `data` has changed. Without it you get a stale write racing the new navigation.
 
 **Pitfall: self-reference in `$state`**
 
@@ -540,15 +616,38 @@ export default config
 
 ```ts
 // vite.config.ts
-import { vitePlugin as bareExternals } from 'sveltekit-adapter-bare';
-import { defineConfig } from 'vite';
+import tailwindcss from '@tailwindcss/vite'
+import { sveltekit } from '@sveltejs/kit/vite'
+import { vitePlugin as bareExternals } from 'sveltekit-adapter-bare'
+import { defineConfig } from 'vite'
 
 export default defineConfig({
-  plugins: [tailwindcss(), sveltekit(), bareExternals()],
-  // vitePlugin auto-adds all bare-* packages to ssr.external
-  // Manual additions for non-bare holepunch packages still needed:
-  ssr: { external: ['distributed-drive', 'hyperdb', 'corestore', ...] }
-});
+  plugins: [tailwindcss(), sveltekit(), bareExternals()]
+  // No manual ssr.external needed.
+  // bareExternals() reads package.json and externalizes ALL runtime
+  // dependencies — bare-*, holepunch packages, native addons, everything.
+  // Just make sure every native dep is in "dependencies" (not devDependencies).
+})
+```
+
+### Android back navigation
+
+The adapter intercepts the Android back gesture/button automatically and calls `history.back()` in the WebView. No app code needed.
+
+To override, listen for the cancelable `bare:back` DOM event:
+
+```svelte
+<script>
+  import { onMount } from 'svelte'
+  onMount(() => {
+    const handler = (e) => {
+      e.preventDefault()
+      // custom logic
+    }
+    window.addEventListener('bare:back', handler)
+    return () => window.removeEventListener('bare:back', handler)
+  })
+</script>
 ```
 
 ### Shutdown: Ctrl-C, window close, and `sveltekit:close`
@@ -715,6 +814,7 @@ Track the `discovery` handle returned by the original `join()`.
 - **`csrf: { checkOrigin: false }` missing from `svelte.config.js`** — form actions silently fail inside Bare because the request origin never matches the server. Required, not optional.
 - **`runes: true` globally in `compilerOptions`** — breaks any Holepunch dep that isn't in runes mode. Use the scoped form: `runes: ({ filename }) => filename.split(/[/\\]/).includes('node_modules') ? undefined : true`.
 - **`manifest.xml` missing for Android builds** — `make:android` fails immediately. Create the file in the project root (see scaffolding section for the template).
+- **Android swipe-back gesture not working** — add `android:enableOnBackInvokedCallback="true"` to the `<application>` tag and set `minSdkVersion="33"`. Without it, `OnBackInvokedDispatcher` only catches button presses, not edge swipes.
 - **`--icon` flag without a real PNG** — `make:darwin` requires a PNG in the project root. Do not auto-generate a placeholder; ask the user to provide it.
 - **`throw redirect()` in any server file** — breaks Android navigation. Return `{ redirect: '/path' }` and call `goto()` in the enhance callback instead.
 - **Blocking in layout.server.ts** — `await locals.app.ready()` before returning causes a white screen. Stream instead.
@@ -722,6 +822,10 @@ Track the `discovery` handle returned by the original `join()`.
 - **`Promise.resolve(x)` antipattern** — just use `x` directly or `{#await data.x}` in the template.
 - **`(async () => {...})()`** — IIFEs for side effects (e.g. `goto()`) are not clean. Use server-side redirects or named handlers.
 - **`$state` self-reference** — `let x = $state(x.map(...))` crashes SSR. Read from `data.x`.
+- **`+` in query params on Android** — Android WebView decodes `+` as a space in query strings. `url.searchParams.get('path')` may return `/my+folder` instead of `/my folder`. Always call `.replaceAll('+', ' ')` on path/file params read from the URL: `url.searchParams.get('path')?.replaceAll('+', ' ') ?? '/'`.
+- **Stale `$effect` writing after navigation** — an async `$effect` that awaits a slow promise (e.g. `data.fresh`) can resolve after the user has navigated away. Always use a `cancelled` flag: set it in the cleanup (`return () => { cancelled = true }`) and check before every state write.
+- **`goto()` not refreshing layout data** — `goto('/some-path')` does not re-run the root layout load if the root URL segment is unchanged. Pass `{ invalidate: ['app:layout'] }` to `goto()`, or call `invalidate('app:layout')` before navigating.
+- **Child component never calling `onchange` with initial value** — if a child receives an initial value as a prop but only calls `onchange` on SSE/event updates, the parent's reactive state stays at its default (e.g. `0` peer count → wrong banner shown). Use `onMount(() => onchange?.(initial))` in the child to sync the parent immediately on mount.
 - **Forgetting `cancel()` cleanup in SSE** — leaks a listener per reconnect. Track refs in outer `let`s.
 - **Forgetting `setMaxListeners(0)` on EventHub** — floods stderr once a few SSE clients connect.
 - **`swarm.join` to update announce state** — silently doubles up sessions. Use `discovery.refresh`.
@@ -731,9 +835,13 @@ Track the `discovery` handle returned by the original `join()`.
 
 ## Quick checklist for a new feature
 
-1. Async data? → Named `async function` in `loaders.ts`, return its promise from load, `{#await}` in template.
-2. UI update needed? → Emit on EventHub, subscribe in SSE endpoint, listen in `onMount`.
-3. Mutation? → Form action + `use:enhance`, optimistic local state for toggles.
-4. New long-lived resource? → `ReadyResource` subclass, opened in `_open()`, closed in `_close()`.
-5. New swarm topic? → Keep the `discovery` handle, use `discovery.refresh()` to mutate.
-6. Untyped package? → `ambient.d.ts` module declaration; if package ships own types, cast with `as any` at boundary.
+1. Async P2P data? → Named `async function` in `loaders.ts`, return its promise (not awaited) from load, `{#await}` in template.
+2. Many items to resolve per-entry? → Fire promises inside the `for await` loop without awaiting; collect in array; `Promise.all()` after.
+3. Repeat navigation fast? → Add a TTL cache in `loaders.ts`; return `{ entries, fresh }` for SWR — instant stale render + background refresh.
+4. Mutation that changes sidebar/layout? → `goto(path, { invalidate: ['app:layout'] })` — `goto()` alone won't re-run the layout load.
+5. UI update needed? → Emit on EventHub, subscribe in SSE endpoint, listen in `onMount`.
+6. Form action? → `use:enhance`, return `{}` from server, `goto()` on client. Never `throw redirect()`.
+7. New long-lived resource? → `ReadyResource` subclass, opened in `_open()`, closed in `_close()`.
+8. New swarm topic? → Keep the `discovery` handle, use `discovery.refresh()` to mutate.
+9. Untyped package? → `ambient.d.ts` module declaration; if package ships own types, cast with `as any` at boundary.
+10. Path/file query param? → `.replaceAll('+', ' ')` — Android WebView decodes `+` as space.
