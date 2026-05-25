@@ -118,13 +118,14 @@ Required by `make:android`. Place it in the project root. Minimum viable manifes
     android:versionName="1.0"
     package="com.yourorg.yourapp"
 >
-  <uses-sdk android:minSdkVersion="31" android:targetSdkVersion="36" />
+  <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="36" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
   <application
         android:label="YourApp"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true"
     >
     <activity
             android:name="to.holepunch.bare.Activity"
@@ -629,6 +630,26 @@ export default defineConfig({
 })
 ```
 
+### Android back navigation
+
+The adapter intercepts the Android back gesture/button automatically and calls `history.back()` in the WebView. No app code needed.
+
+To override, listen for the cancelable `bare:back` DOM event:
+
+```svelte
+<script>
+  import { onMount } from 'svelte'
+  onMount(() => {
+    const handler = (e) => {
+      e.preventDefault()
+      // custom logic
+    }
+    window.addEventListener('bare:back', handler)
+    return () => window.removeEventListener('bare:back', handler)
+  })
+</script>
+```
+
 ### Shutdown: Ctrl-C, window close, and `sveltekit:close`
 
 The adapter emits `sveltekit:close` on shutdown. Register teardown there:
@@ -793,6 +814,7 @@ Track the `discovery` handle returned by the original `join()`.
 - **`csrf: { checkOrigin: false }` missing from `svelte.config.js`** — form actions silently fail inside Bare because the request origin never matches the server. Required, not optional.
 - **`runes: true` globally in `compilerOptions`** — breaks any Holepunch dep that isn't in runes mode. Use the scoped form: `runes: ({ filename }) => filename.split(/[/\\]/).includes('node_modules') ? undefined : true`.
 - **`manifest.xml` missing for Android builds** — `make:android` fails immediately. Create the file in the project root (see scaffolding section for the template).
+- **Android swipe-back gesture not working** — add `android:enableOnBackInvokedCallback="true"` to the `<application>` tag and set `minSdkVersion="33"`. Without it, `OnBackInvokedDispatcher` only catches button presses, not edge swipes.
 - **`--icon` flag without a real PNG** — `make:darwin` requires a PNG in the project root. Do not auto-generate a placeholder; ask the user to provide it.
 - **`throw redirect()` in any server file** — breaks Android navigation. Return `{ redirect: '/path' }` and call `goto()` in the enhance callback instead.
 - **Blocking in layout.server.ts** — `await locals.app.ready()` before returning causes a white screen. Stream instead.

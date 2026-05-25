@@ -7,6 +7,10 @@
       "android": "./lib/read-asset.android.js",
       "default": "./lib/read-asset.js"
     },
+    "#navigation": {
+      "android": "./libs/navigation/android.js",
+      "default": "./libs/navigation/default.js"
+    },
     "process": {
       "bare": "bare-process",
       "default": "process"

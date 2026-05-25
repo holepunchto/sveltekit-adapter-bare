@@ -67,6 +67,31 @@ export default defineConfig({
 })
 ```
 
+## Android back navigation
+
+On Android, the adapter automatically intercepts the system back gesture/button (via [`bare-navigation-android`](https://github.com/holepunchto/bare-navigation-android)) and calls `history.back()` in the WebView — no app code required.
+
+To intercept the event and run custom logic, listen for the cancelable `bare:back` DOM event in your layout:
+
+```svelte
+<!-- src/routes/+layout.svelte -->
+<script>
+  import { onMount } from 'svelte'
+  onMount(() => {
+    const handler = (e) => {
+      e.preventDefault()
+      // custom logic — e.g. show a confirmation dialog before closing
+    }
+    window.addEventListener('bare:back', handler)
+    return () => window.removeEventListener('bare:back', handler)
+  })
+</script>
+```
+
+Calling `e.preventDefault()` suppresses the default `history.back()`. To close the app explicitly use `BackHandler.close()` from `bare-navigation-android`.
+
+> **Manifest requirement**: add `android:enableOnBackInvokedCallback="true"` to your `<application>` tag and set `minSdkVersion` to at least 33. Without the flag, edge-swipe gestures are not intercepted (button presses still work).
+
 ## Graceful shutdown and `sveltekit:close`
 
 The adapter fires `sveltekit:close` on process exit (Ctrl-C, SIGTERM, and native window close). Use it to tear down long-lived resources:

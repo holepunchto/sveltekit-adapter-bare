@@ -4,6 +4,7 @@ import { webcrypto } from 'bare-crypto'
 import { Window, WebView } from 'bare-native'
 import { command, flag } from 'paparam'
 import { handler } from 'HANDLER'
+import BackHandler from '#navigation'
 
 globalThis.crypto = webcrypto
 
@@ -95,6 +96,12 @@ server.listen(requested_port, host, () => {
   // AppKitWindow (macOS) emits 'will-close' when the user clicks the red X.
   // Without this the process keeps running after the window is gone.
   win._native?.on?.('will-close', shutdown)
+
+  BackHandler.on('back', () => {
+    webView.loadURL(
+      'javascript:(function(){var e=new CustomEvent("bare:back",{cancelable:true,bubbles:true});window.dispatchEvent(e);if(!e.defaultPrevented)history.back()})()'
+    )
+  })
 })
 
 export { server }
