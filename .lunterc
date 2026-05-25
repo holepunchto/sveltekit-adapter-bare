@@ -1,0 +1,3 @@
+{
+  "globals": ["WINDOW_WIDTH","WINDOW_HEIGHT","WINDOW_INSPECTABLE"]
+}

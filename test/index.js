@@ -1,5 +1,5 @@
 const { test } = require('brittle')
 
-test('works', async (t) => {
+test('works', (t) => {
   t.pass()
 })
