@@ -14,6 +14,7 @@
   "files": [
     "async-hooks-stub.js",
     "package.json",
+    "index.d.ts",
     "index.js",
     "inject.js",
     "files"
