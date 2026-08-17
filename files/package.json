@@ -3,10 +3,6 @@
   "private": true,
   "type": "module",
   "imports": {
-    "#read-asset": {
-      "android": "./lib/read-asset.android.js",
-      "default": "./lib/read-asset.js"
-    },
     "#navigation": {
       "android": "./libs/navigation/android.js",
       "default": "./libs/navigation/default.js"
@@ -17,6 +13,7 @@
     }
   },
   "dependencies": {
+    "b4a": "^1.6.7",
     "bare-crypto": "^1.13.4",
     "bare-fetch": "^2.8.2",
     "bare-fs": "^4.7.1",
