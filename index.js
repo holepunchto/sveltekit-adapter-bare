@@ -68,35 +68,59 @@ export default function (opts = {}) {
         ].join('\n\n')
       )
 
-      // Redirect node: builtins to bare equivalents so the server bundle
-      // resolves correctly in a bare runtime.
-      /** @type {Record<string, string>} */
-      const bare_aliases = {
-        'node:buffer': 'bare-buffer',
-        'node:stream': 'bare-stream',
-        'node:fs': 'bare-fs',
-        'node:fs/promises': 'bare-fs',
-        'node:path': 'bare-path',
-        'node:url': 'bare-url',
-        'node:crypto': 'bare-crypto',
-        'node:process': 'bare-process',
-        'node:module': 'bare-module',
-        'node:os': 'bare-os',
-        'node:events': 'bare-events',
-        'node:timers': 'bare-timers',
+      // Rewrite node builtins to their bare counterparts, in both bare and
+      // node: specifier form.
+      //
+      // This is the only chance to rewrite them. A builtin missing from the map
+      // survives into the chunks verbatim, and by the time bare resolves it the
+      // generated build/ is its own package — so the app's `imports` map, the
+      // thing that made the specifier work under `vite dev`, is out of scope.
+      // The failure then lands on whoever bundles the app rather than on
+      // whoever built it, which is why this covers everything bare implements
+      // and not just what one app happened to import.
+      const bare_modules = {
+        assert: 'bare-assert',
         buffer: 'bare-buffer',
-        stream: 'bare-stream',
-        fs: 'bare-fs',
-        'fs/promises': 'bare-fs',
-        path: 'bare-path',
-        url: 'bare-url',
+        child_process: 'bare-subprocess',
+        console: 'bare-console',
         crypto: 'bare-crypto',
-        process: 'bare-process',
-        module: 'bare-module',
-        os: 'bare-os',
+        dgram: 'bare-dgram',
+        dns: 'bare-dns',
         events: 'bare-events',
+        fs: 'bare-fs',
+        'fs/promises': 'bare-fs/promises',
+        http: 'bare-http1',
+        https: 'bare-https',
+        inspector: 'bare-inspector',
+        module: 'bare-module',
+        net: 'bare-net',
+        os: 'bare-os',
+        path: 'bare-path',
+        'path/posix': 'bare-path/posix',
+        'path/win32': 'bare-path/win32',
+        perf_hooks: 'bare-performance',
+        process: 'bare-process',
+        readline: 'bare-readline',
+        repl: 'bare-repl',
+        stream: 'bare-stream',
+        'stream/promises': 'bare-stream/promises',
+        'stream/web': 'bare-stream/web',
+        string_decoder: 'bare-string-decoder',
         timers: 'bare-timers',
-        'node:async_hooks': async_hooks_stub
+        'timers/promises': 'bare-timers/promises',
+        tls: 'bare-tls',
+        tty: 'bare-tty',
+        url: 'bare-url',
+        worker_threads: 'bare-worker',
+        zlib: 'bare-zlib'
+      }
+
+      /** @type {Record<string, string>} */
+      const bare_aliases = { 'node:async_hooks': async_hooks_stub }
+
+      for (const [builtin, bare] of Object.entries(bare_modules)) {
+        bare_aliases[builtin] = bare
+        bare_aliases[`node:${builtin}`] = bare
       }
 
       const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
@@ -105,7 +129,17 @@ export default function (opts = {}) {
       // via bare-module-resolve, preserving the full transitive resolution chain.
       // Bundling a dep that transitively reaches a native addon causes bare-pack
       // to see require('.') inside a chunk — which it cannot satisfy.
-      const external = Object.keys(pkg.dependencies ?? {}).flatMap((d) => [d, `${d}/*`])
+      //
+      // Everything we alias to goes in that set too. An app that imports `zlib`
+      // rarely depends on bare-zlib by name, and bundling a bare shim is exactly
+      // the case above — most of them reach an addon. External, they resolve at
+      // runtime by walking up from build/ like any other dependency.
+      const external = [
+        ...new Set([
+          ...Object.keys(pkg.dependencies ?? {}),
+          ...Object.values(bare_modules).map((m) => m.split('/')[0])
+        ])
+      ].flatMap((d) => [d, `${d}/*`])
 
       await build({
         entryPoints: {
