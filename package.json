@@ -28,7 +28,7 @@
     "bare-fs": "^4.7.1",
     "bare-http1": "^4.5.6",
     "bare-module": "^6.2.0",
-    "bare-native": "^0.1.2",
+    "bare-native": "^0.3.8",
     "bare-navigation-android": "file:../bare-navigation-android",
     "bare-process": "^4.4.1",
     "bare-stream": "^2.13.1",
