@@ -1,7 +1,7 @@
 import http from 'bare-http1'
 import process from 'bare-process'
 import { webcrypto } from 'bare-crypto'
-import { Window, WebView } from 'bare-native'
+import { Window, View, WebView } from 'bare-native'
 import { command, flag } from 'paparam'
 import { handler } from 'HANDLER'
 import BackHandler from '#navigation'
@@ -73,7 +73,7 @@ async function shutdown() {
   } catch {}
   // Closing the native window handle lets the AppKit/GTK event loop exit cleanly
   try {
-    win?._native?.close()
+    win?.native?.close()
   } catch {}
   process.exit(0)
 }
@@ -89,18 +89,24 @@ server.listen(requested_port, host, () => {
 
   win = new Window(width, height)
   const webView = new WebView()
-  win.content(webView)
-  webView.loadURL(`http://localhost:${port}`)
-  if (inspectable) webView.inspectable(true)
+  webView.style = { flex: 1 }
+  webView.inspectable = inspectable
+  webView.url = `http://localhost:${port}`
 
-  // AppKitWindow (macOS) emits 'will-close' when the user clicks the red X.
+  // A web view isn't a native view on every platform, so it can't be the
+  // window's content itself. A root view hosts it and fills the window.
+  const root = new View()
+  root.style = { flex: 1 }
+  root.appendChild(webView)
+  win.content(root).show()
+
+  // AppKitWindow (macOS) emits 'willClose' when the user clicks the red X.
   // Without this the process keeps running after the window is gone.
-  win._native?.on?.('will-close', shutdown)
+  win.native?.on?.('willClose', shutdown)
 
   BackHandler.on('back', () => {
-    webView.loadURL(
+    webView.url =
       'javascript:(function(){var e=new CustomEvent("bare:back",{cancelable:true,bubbles:true});window.dispatchEvent(e);if(!e.defaultPrevented)history.back()})()'
-    )
   })
 })
 
